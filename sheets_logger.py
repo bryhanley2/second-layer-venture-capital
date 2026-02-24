@@ -186,6 +186,33 @@ def company_to_row(result: dict, date_str: str) -> list:
     ]
 
 
+
+def get_previously_seen_companies() -> set:
+    """
+    Reads the Company column from the Pipeline sheet and returns
+    a set of lowercase company names already evaluated.
+    Returns empty set if sheet not configured or empty.
+    """
+    sa_json  = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
+
+    if not sa_json or not sheet_id:
+        return set()
+
+    try:
+        token = _get_access_token(sa_json)
+        url = (f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+               f"/values/Pipeline!B2:B10000")
+        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+        rows = resp.json().get("values", [])
+        seen = {row[0].lower().strip() for row in rows if row}
+        print(f"Loaded {len(seen)} previously seen companies from sheet")
+        return seen
+    except Exception as e:
+        print(f"Could not load previous companies: {e}")
+        return set()
+
+
 def append_results_to_sheet(results: list[dict], date_str: str):
     """
     Main function — appends all scored companies from today's run to the sheet.
