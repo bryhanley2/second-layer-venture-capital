@@ -57,6 +57,20 @@ FUND_KEYWORDS = [
     "opportunity fund", "equity fund", "credit fund",
 ]
 
+
+# Signals that indicate Series B+ — filter these out at sourcing stage
+LATE_STAGE_SIGNALS = [
+    "series b", "series c", "series d", "series e",
+    "$50 million", "$75 million", "$100 million", "$150 million", "$200 million",
+    "$50m", "$75m", "$100m", "$150m", "$200m",
+    "50 million", "75 million", "100 million",
+    "growth stage", "late stage", "pre-ipo",
+]
+
+def is_late_stage(text):
+    t = text.lower()
+    return any(signal in t for signal in LATE_STAGE_SIGNALS)
+
 def is_relevant(text):
     t = text.lower()
     return any(kw in t for kw in SECOND_LAYER_KEYWORDS)
@@ -82,7 +96,7 @@ def source_yc():
         ]
         terms   = [all_terms[(day * 2) % len(all_terms)],
                    all_terms[(day * 2 + 1) % len(all_terms)]]
-        batches = ["W25", "S24", "W24", "S23", "W23", "S22"]
+        batches = ["W25", "S24", "W24", "S23", "W23", "S22", "W22", "S21", "W21"]
 
         for term in terms:
             for batch in batches:
@@ -278,7 +292,8 @@ def source_rss_feeds():
                 )
                 if match:
                     name = match.group(1).strip()
-                    if name and not is_fund(name) and len(name) > 3:
+                    if (name and not is_fund(name) and len(name) > 3
+                            and not is_late_stage(title)):
                         companies.append({
                             "name": name,
                             "description": title,
@@ -317,16 +332,16 @@ def source_claude_research():
 
 Today's vertical: {vertical}
 
-List exactly 6 real seed-stage or Series A startups (founded 2021-2025) in this 
-vertical that solve a downstream compliance, risk, or infrastructure problem 
-created by a dominant industry trend.
+List exactly 10 real startups in this vertical that solve a downstream compliance, 
+risk, or infrastructure problem created by a dominant industry trend.
 
-Requirements:
+STRICT Requirements:
 - Must be real companies you know about
-- Founded 2021-2025
-- Seed or Series A stage
+- Founded 2019-2025
+- ONLY Seed or Series A stage — absolutely no Series B, C, D or later
 - B2B focus
-- Genuinely solving a Second Layer problem (not just being IN the dominant industry)
+- Genuinely solving a Second Layer problem (not being IN the dominant industry)
+- Prioritize lesser-known companies over well-known ones
 
 Respond ONLY with a JSON array, no other text:
 [
@@ -355,7 +370,7 @@ Respond ONLY with a JSON array, no other text:
         print(f"Claude Research: {len(companies)} candidates")
     except Exception as e:
         print(f"Claude Research error: {e}")
-    return companies[:6]
+    return companies[:10]
 
 
 # ── SOURCE 6: GITHUB SEARCH API (no auth needed for basic search) ─────────────
@@ -496,6 +511,15 @@ Respond ONLY with a single valid JSON object. No markdown, no explanation, just 
 
 WEIGHTS = {"1A":0.10,"1B":0.08,"1C":0.07,"2A":0.12,"2B":0.08,
            "3A":0.12,"3B":0.08,"4":0.07,"5":0.08,"6":0.10,"7":0.10}
+
+LATE_STAGE_KEYWORDS_HARD = ["series b", "series c", "series d", "series e",
+                               "growth equity", "pre-ipo", "late stage"]
+
+def is_definitely_late_stage(co):
+    """Hard filter — skip scoring entirely if company is clearly Series B+."""
+    text = f"{co.get('name','')} {co.get('description','')}".lower()
+    return any(kw in text for kw in LATE_STAGE_KEYWORDS_HARD)
+
 
 def score_company(co):
     prompt = SCORE_PROMPT.format(
@@ -650,7 +674,7 @@ def build_email(results, date_str, total_seen):
         f"{r.get('score_pct',0):.1f}%</td>"
         f"<td style='padding:6px 10px;font-size:12px;'>{r.get('decision','')}</td>"
         f"<td style='padding:6px 10px;font-size:12px;color:#888;'>"
-        f"{r.get('key_weakness','')[:65]}...</td>"
+        f"{r.get('key_weakness','')}</td>"
         f"</tr>"
         for i, r in enumerate(below)
     )
@@ -761,6 +785,9 @@ def main():
 
     results = []
     for co in candidates:
+        if is_definitely_late_stage(co):
+            print(f"Skipping (late stage): {co['name']}")
+            continue
         print(f"Scoring: {co['name']} ({co.get('source','')})")
         result = score_company(co)
         if result:
