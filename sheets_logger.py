@@ -196,6 +196,7 @@ def get_previously_seen_companies() -> set:
     sa_json  = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
 
+    print(f"DEBUG get_previously_seen: sa_json length={len(sa_json)}, sheet_id='{sheet_id}'")
     if not sa_json or not sheet_id:
         return set()
 
@@ -221,6 +222,7 @@ def append_results_to_sheet(results: list[dict], date_str: str):
     sa_json  = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
 
+    print(f"DEBUG append: sa_json length={len(sa_json)}, sheet_id='{sheet_id}'")
     if not sa_json or not sheet_id:
         print("⚠️  Google Sheets logging skipped — secrets not configured.")
         print("    Add GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEET_ID to GitHub Secrets.")
