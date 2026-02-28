@@ -429,17 +429,203 @@ def source_github_search():
     return companies[:4]
 
 
+
+# ── SOURCE 7: NEWSLETTER RSS FEEDS ───────────────────────────────────────────
+def source_newsletters():
+    """
+    Parses high-signal early-stage startup newsletters via RSS.
+    These surface companies before TechCrunch picks them up.
+    - TLDR: daily tech newsletter, covers seed/early funding
+    - StrictlyVC: daily VC newsletter focused on early stage
+    - The Hustle: startup and business news
+    - SaaStr: B2B SaaS focused
+    - Crunchbase News: funding-focused, often seed rounds
+    """
+    companies = []
+    feeds = [
+        ("https://tldr.tech/rss", "TLDR"),
+        ("https://strictlyvc.com/feed/", "StrictlyVC"),
+        ("https://news.crunchbase.com/feed/", "Crunchbase News"),
+        ("https://www.saastr.com/feed/", "SaaStr"),
+        ("https://thehustle.co/feed/", "The Hustle"),
+    ]
+    funding_words = ["raises", "funding", "seed", "series a", "launches",
+                     "secures", "closes", "backed", "invests", "pre-seed"]
+    skip_words    = ["series b", "series c", "series d", "series e",
+                     "$50m", "$75m", "$100m", "$50 million", "$100 million"]
+
+    for feed_url, feed_name in feeds:
+        try:
+            resp = requests.get(feed_url, headers=HEADERS, timeout=15)
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.content)
+            for item in root.findall(".//item"):
+                title = item.findtext("title", "")
+                desc  = item.findtext("description", "") or ""
+                text  = BeautifulSoup(desc, "html.parser").get_text()
+                combined = f"{title} {text}"
+
+                if not any(w in title.lower() for w in funding_words):
+                    continue
+                if any(w in combined.lower() for w in skip_words):
+                    continue
+                if not is_relevant(combined):
+                    continue
+
+                match = re.match(
+                    r"^([A-Z][A-Za-z0-9\.\-\s]{2,28?}?)\s+"
+                    r"(?:raises|secures|closes|gets|lands|launches|announces|nabs)",
+                    title
+                )
+                if match:
+                    name = match.group(1).strip()
+                    if name and not is_fund(name) and len(name) > 3:
+                        companies.append({
+                            "name": name,
+                            "description": title,
+                            "source": feed_name,
+                        })
+            time.sleep(1)
+        except Exception as e:
+            print(f"Newsletter {feed_name} error: {e}")
+
+    print(f"Newsletters: {len(companies)} candidates")
+    return companies[:8]
+
+
+# ── SOURCE 8: WELLFOUND (ANGELLIST) JOB POSTINGS ─────────────────────────────
+def source_wellfound():
+    """
+    Scrapes Wellfound for seed/pre-seed companies actively hiring.
+    A company posting its first engineering job = likely just raised seed.
+    Uses their public job search — no auth needed.
+    """
+    companies = []
+    try:
+        day     = datetime.date.today().weekday()
+        # Role types that signal seed-stage Second Layer companies
+        roles = [
+            "compliance engineer", "security engineer",
+            "healthcare engineer", "legal tech",
+            "fintech engineer", "privacy engineer",
+            "risk platform", "regtech engineer",
+        ]
+        role = roles[day % len(roles)]
+
+        # Wellfound public search URL
+        url  = (f"https://wellfound.com/jobs"
+                f"?q={requests.utils.quote(role)}"
+                f"&stage[]=seed&stage[]=pre-seed")
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        seen_names = set()
+        # Look for company name patterns in the page
+        for el in soup.find_all(["h2","h3","strong","a"], 
+                                 class_=re.compile(r"company|startup|name|title", re.I)):
+            name = el.get_text(strip=True)
+            if (name and 3 < len(name) < 50 and name not in seen_names
+                    and not is_fund(name) and not is_late_stage(name)):
+                seen_names.add(name)
+                companies.append({
+                    "name": name,
+                    "description": f"Wellfound seed-stage hiring: {role}",
+                    "source": "Wellfound",
+                })
+
+        print(f"Wellfound: {len(companies)} candidates")
+    except Exception as e:
+        print(f"Wellfound error: {e}")
+    return companies[:5]
+
+
+# ── SOURCE 9: BETALIST ────────────────────────────────────────────────────────
+def source_betalist():
+    """
+    BetaList surfaces pre-launch and very early stage startups.
+    These are often pre-seed companies before any funding announcement.
+    Public RSS feed — reliable and not blocked.
+    """
+    companies = []
+    try:
+        resp = requests.get("https://betalist.com/feed", headers=HEADERS, timeout=15)
+        root = ET.fromstring(resp.content)
+        for item in root.findall(".//item"):
+            title = item.findtext("title", "")
+            desc  = item.findtext("description", "") or ""
+            text  = BeautifulSoup(desc, "html.parser").get_text()
+            combined = f"{title} {text}"
+
+            if is_relevant(combined) and not is_late_stage(combined):
+                # BetaList titles are usually just the company name
+                name = title.strip()
+                if name and len(name) > 2 and not is_fund(name):
+                    companies.append({
+                        "name": name,
+                        "description": text[:200] if text else f"BetaList: {title}",
+                        "source": "BetaList",
+                    })
+
+        print(f"BetaList: {len(companies)} candidates")
+    except Exception as e:
+        print(f"BetaList error: {e}")
+    return companies[:5]
+
+
+# ── SOURCE 10: EUREKALIST / STARTUPBASE ───────────────────────────────────────
+def source_startupbase():
+    """
+    StartupBase and similar directories list newly launched startups.
+    Good for pre-seed companies that haven't raised yet.
+    """
+    companies = []
+    sources = [
+        ("https://startupbase.io/rss", "StartupBase"),
+        ("https://www.f6s.com/rss/feed", "F6S"),
+    ]
+    for feed_url, feed_name in sources:
+        try:
+            resp = requests.get(feed_url, headers=HEADERS, timeout=15)
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.content)
+            for item in root.findall(".//item"):
+                title = item.findtext("title", "")
+                desc  = item.findtext("description", "") or ""
+                text  = BeautifulSoup(desc, "html.parser").get_text()
+                combined = f"{title} {text}"
+
+                if is_relevant(combined) and not is_late_stage(combined):
+                    name = title.strip()
+                    if name and len(name) > 2 and not is_fund(name):
+                        companies.append({
+                            "name": name,
+                            "description": text[:200] or title,
+                            "source": feed_name,
+                        })
+            time.sleep(1)
+        except Exception as e:
+            print(f"{feed_name} error: {e}")
+
+    print(f"StartupBase/F6S: {len(companies)} candidates")
+    return companies[:5]
+
 # ── AGGREGATE + DEDUPLICATE ───────────────────────────────────────────────────
 def get_candidate_companies(previously_seen):
     all_companies = []
-    print("\n--- Sourcing from 6 channels ---")
+    print("\n--- Sourcing from 10 channels ---")
 
     all_companies.extend(source_yc());               time.sleep(2)
     all_companies.extend(source_hacker_news());      time.sleep(2)
     all_companies.extend(source_sec_form_d());       time.sleep(2)
     all_companies.extend(source_rss_feeds());        time.sleep(2)
     all_companies.extend(source_claude_research());  time.sleep(2)
-    all_companies.extend(source_github_search())
+    all_companies.extend(source_github_search());    time.sleep(2)
+    all_companies.extend(source_newsletters());      time.sleep(2)
+    all_companies.extend(source_wellfound());        time.sleep(2)
+    all_companies.extend(source_betalist());         time.sleep(2)
+    all_companies.extend(source_startupbase())
 
     # Dedup within today's run
     seen_today, unique_today = set(), []
@@ -460,7 +646,7 @@ def get_candidate_companies(previously_seen):
 
     print(f"\nRaw: {len(all_companies)} | Unique: {len(unique_today)} | "
           f"Skipped (seen before): {len(skipped)} | Fresh: {len(fresh)}")
-    return fresh[:15]
+    return fresh[:20]
 
 
 # ── SCORING ───────────────────────────────────────────────────────────────────
