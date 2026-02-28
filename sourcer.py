@@ -507,7 +507,7 @@ Important: If you have limited information, score conservatively (4-6 range).
 Do not hallucinate specific metrics — note "limited info" in weaknesses if applicable.
 
 Respond ONLY with a single valid JSON object. No markdown, no explanation, just JSON:
-{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/Series A/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"2B":5,"3A":5,"3B":5,"4":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence"}}"""
+{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/Series A/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"2B":5,"3A":5,"3B":5,"4":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence","stage_gate":"PASS or FAIL — FAIL if Series B or later"}}"""
 
 WEIGHTS = {"1A":0.10,"1B":0.08,"1C":0.07,"2A":0.12,"2B":0.08,
            "3A":0.12,"3B":0.08,"4":0.07,"5":0.08,"6":0.10,"7":0.10}
@@ -549,6 +549,15 @@ def score_company(co):
         data["weighted_score"] = round(ws, 2)
         data["score_pct"]      = round(pct, 1)
         data["source"]         = co.get("source", "")
+        # Stage gate — drop Series B+ companies after Claude identifies their stage
+        stage        = data.get("stage", "").lower()
+        stage_gate   = data.get("stage_gate", "PASS").upper()
+        late_stages  = ["series b", "series c", "series d", "series e",
+                        "growth", "late stage", "pre-ipo"]
+        if stage_gate == "FAIL" or any(s in stage for s in late_stages):
+            print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown stage')})")
+            return None  # Drop — will not appear in digest
+
         if pct >= 85:   data["decision"] = "★★★★★ STRONG YES"
         elif pct >= 75: data["decision"] = "★★★★ YES"
         elif pct >= 65: data["decision"] = "★★★ DEEP DIVE"
@@ -784,16 +793,21 @@ def main():
         return
 
     results = []
+    stage_gated = 0
     for co in candidates:
         if is_definitely_late_stage(co):
-            print(f"Skipping (late stage): {co['name']}")
+            print(f"Skipping (late stage pre-filter): {co['name']}")
+            stage_gated += 1
             continue
         print(f"Scoring: {co['name']} ({co.get('source','')})")
         result = score_company(co)
         if result:
             results.append(result)
             print(f"  → {result.get('score_pct',0):.1f}% | {result.get('decision','')}")
+        else:
+            stage_gated += 1  # score_company returns None for stage gate fails too
         time.sleep(1)
+    print(f"Stage gated (removed): {stage_gated}")
 
     append_results_to_sheet(results, date_str)
     total_seen = len(previously_seen) + len(results)
