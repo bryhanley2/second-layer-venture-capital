@@ -48,6 +48,19 @@ COLUMNS = [
     "Decision",
     "Key Strength",
     "Key Weakness",
+    # Founder info
+    "Founder Name",
+    "Founder Title",
+    "LinkedIn URL",
+    "Founder Background",
+    # Outreach tracker — fill in manually
+    "Outreach Sent (Y/N)",
+    "Outreach Date",
+    "Response Received (Y/N)",
+    "Response Date",
+    "Meeting Booked (Y/N)",
+    "Meeting Date",
+    "Notes",
 ]
 
 SCORE_KEYS = ["1A","1B","1C","2A","2B","3A","3B","4","5","6","7"]
@@ -156,6 +169,7 @@ def ensure_header_row(sheet_id: str, token: str):
 def company_to_row(result: dict, date_str: str) -> list:
     """Converts a scored company dict into a flat row matching COLUMNS."""
     scores = result.get("scores", {})
+    founder = result.get("founder", {})
     return [
         date_str,
         result.get("company_name", ""),
@@ -183,6 +197,13 @@ def company_to_row(result: dict, date_str: str) -> list:
         result.get("decision", ""),
         result.get("key_strength", ""),
         result.get("key_weakness", ""),
+        # Founder info
+        founder.get("founder_name", ""),
+        founder.get("founder_title", ""),
+        founder.get("linkedin_url", ""),
+        founder.get("founder_background", ""),
+        # Outreach tracker — left blank for manual entry
+        "", "", "", "", "", "", "",
     ]
 
 
