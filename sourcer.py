@@ -755,6 +755,48 @@ def score_company(co):
         return None
 
 
+
+
+# ── FOUNDER RESEARCH ──────────────────────────────────────────────────────────
+def research_founder(company: dict) -> dict:
+    """
+    For companies scoring ≥75%, asks Claude to identify the founder
+    name and LinkedIn URL. Only runs on high-scoring companies to save cost.
+    """
+    prompt = f"""You are a startup researcher.
+
+Find the founder(s) of this company:
+Company: {company.get("company_name", "")}
+What they do: {company.get("what_they_do", "")}
+Vertical: {company.get("vertical", "")}
+
+Return ONLY valid JSON, no other text:
+{{
+  "founder_name": "Full Name or unknown",
+  "founder_title": "CEO/CTO/Co-Founder or unknown",
+  "linkedin_url": "https://linkedin.com/in/handle or unknown",
+  "founder_background": "One sentence on relevant background"
+}}
+
+If you are not confident about the LinkedIn URL, return "unknown" rather than guessing."""
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw   = re.sub(r"^```json\s*|^```\s*|\s*```$", "", resp.content[0].text.strip())
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            data = json.loads(match.group())
+            print(f"  Founder: {data.get('founder_name','')} — {data.get('linkedin_url','')}")
+            return data
+    except Exception as e:
+        print(f"  Founder research error: {e}")
+    return {"founder_name": "unknown", "founder_title": "unknown",
+            "linkedin_url": "unknown", "founder_background": "unknown"}
+
 # ── EMAIL ─────────────────────────────────────────────────────────────────────
 DECISION_STYLE = {
     "★★★★★ STRONG YES":("#1a472a","#a9d18e"),
@@ -788,6 +830,35 @@ def src_badge(source):
     color = next((v for k, v in SOURCE_COLORS.items() if source.startswith(k[:6])), "#666")
     return (f'<span style="background:{color};color:white;padding:2px 8px;'
             f'border-radius:10px;font-size:10px;font-weight:bold;">{source}</span>')
+
+
+def founder_section(co):
+    """Renders founder info + LinkedIn button for high-scoring companies."""
+    founder = co.get("founder", {})
+    if not founder or founder.get("founder_name","") in ["", "unknown"]:
+        return ""
+    name     = founder.get("founder_name", "")
+    title    = founder.get("founder_title", "")
+    linkedin = founder.get("linkedin_url", "")
+    bg       = founder.get("founder_background", "")
+    linkedin_btn = (
+        f'<a href="{linkedin}" target="_blank" '
+        f'style="display:inline-block;background:#0a66c2;color:white;'
+        f'padding:4px 12px;border-radius:4px;font-size:11px;font-weight:bold;'
+        f'text-decoration:none;margin-left:8px;">Connect on LinkedIn →</a>'
+    ) if linkedin and linkedin != "unknown" else ""
+
+    return f'''
+    <div style="background:#f0f5ff;border-radius:4px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <span style="font-size:10px;color:#1a56db;font-weight:bold;">👤 FOUNDER</span>
+        <span style="font-size:12px;font-weight:bold;color:#1b3a6b;margin-left:6px;">{name}</span>
+        <span style="font-size:11px;color:#666;margin-left:4px;">· {title}</span>
+        <div style="font-size:11px;color:#555;margin-top:3px;">{bg}</div>
+      </div>
+      <div>{linkedin_btn}</div>
+    </div>'''
+
 
 def company_card(co):
     dec    = co.get("decision", "★ HARD PASS")
@@ -825,7 +896,7 @@ def company_card(co):
     <table style="width:100%;border-collapse:collapse;margin-bottom:10px;">
       <tr>{cells}</tr>
     </table>
-    <div style="display:flex;gap:10px;">
+    <div style="display:flex;gap:10px;margin-bottom:10px;">
       <div style="flex:1;background:#f0f9f0;border-radius:4px;padding:7px 9px;">
         <div style="font-size:10px;color:#276221;font-weight:bold;margin-bottom:2px;">✅ STRENGTH</div>
         <div style="font-size:11px;color:#333;">{co.get('key_strength','')}</div>
@@ -835,6 +906,7 @@ def company_card(co):
         <div style="font-size:11px;color:#333;">{co.get('key_weakness','')}</div>
       </div>
     </div>
+    {founder_section(co)}
   </div>
 </div>"""
 
@@ -988,6 +1060,12 @@ def main():
         print(f"Scoring: {co['name']} ({co.get('source','')})")
         result = score_company(co)
         if result:
+            # Research founder for high-scoring companies only (saves API cost)
+            if result.get("score_pct", 0) >= 75:
+                result["founder"] = research_founder(result)
+                time.sleep(1)
+            else:
+                result["founder"] = {}
             results.append(result)
             print(f"  → {result.get('score_pct',0):.1f}% | {result.get('decision','')}")
         else:
