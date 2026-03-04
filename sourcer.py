@@ -692,8 +692,20 @@ Source: {source}
 Important: If you have limited information, score conservatively (4-6 range).
 Do not hallucinate specific metrics — note "limited info" in weaknesses if applicable.
 
+Use web search to research this company before scoring. Look up their website,
+LinkedIn, Crunchbase, recent news, and any traction signals you can find.
+
+Even if overall information is limited, actively look for ANY standout traction signals:
+- Customer logos or named enterprise clients
+- Specific revenue figures or growth rates mentioned anywhere
+- App store ratings or review counts
+- GitHub stars or developer adoption
+- Press mentions or award wins
+- Notable investors or accelerator participation
+- Job posting volume (signals growth)
+
 Respond ONLY with a single valid JSON object. No markdown, no explanation, just JSON:
-{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/Series A/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"2B":5,"3A":5,"3B":5,"4":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence","stage_gate":"PASS or FAIL — FAIL if Series B or later"}}"""
+{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/Series A/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"2B":5,"3A":5,"3B":5,"4":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence","stage_gate":"PASS or FAIL — FAIL if Series B or later","traction_highlights":["specific signal 1 if found","specific signal 2 if found"]}}"""
 
 WEIGHTS = {"1A":0.10,"1B":0.08,"1C":0.07,"2A":0.12,"2B":0.08,
            "3A":0.12,"3B":0.08,"4":0.07,"5":0.08,"6":0.10,"7":0.10}
@@ -716,18 +728,30 @@ def score_company(co):
         source=co.get("source", "Unknown"),
     )
     try:
+        # Use web search so Claude can look up real info before scoring
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=800,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": prompt}]
         )
-        raw = resp.content[0].text.strip()
-        # Strip any markdown fences
+
+        # Extract the final text response (after any tool use blocks)
+        raw = ""
+        for block in resp.content:
+            if hasattr(block, "type") and block.type == "text":
+                raw = block.text.strip()
+
+        if not raw:
+            print(f"  No text response for {co['name']}")
+            return None
+
         raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw)
-        # Find the JSON object even if there's surrounding text
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if not match:
             print(f"  No JSON found for {co['name']}")
             return None
+
         data   = json.loads(match.group())
         scores = data.get("scores", {})
         ws     = sum(scores.get(k, 0) * v for k, v in WEIGHTS.items())
@@ -735,14 +759,15 @@ def score_company(co):
         data["weighted_score"] = round(ws, 2)
         data["score_pct"]      = round(pct, 1)
         data["source"]         = co.get("source", "")
-        # Stage gate — drop Series B+ companies after Claude identifies their stage
-        stage        = data.get("stage", "").lower()
-        stage_gate   = data.get("stage_gate", "PASS").upper()
-        late_stages  = ["series b", "series c", "series d", "series e",
-                        "growth", "late stage", "pre-ipo"]
+
+        # Stage gate — drop Series B+ after Claude identifies actual stage
+        stage      = data.get("stage", "").lower()
+        stage_gate = data.get("stage_gate", "PASS").upper()
+        late_stages = ["series b", "series c", "series d", "series e",
+                       "growth", "late stage", "pre-ipo"]
         if stage_gate == "FAIL" or any(s in stage for s in late_stages):
-            print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown stage')})")
-            return None  # Drop — will not appear in digest
+            print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown')})")
+            return None
 
         if pct >= 85:   data["decision"] = "★★★★★ STRONG YES"
         elif pct >= 75: data["decision"] = "★★★★ YES"
@@ -832,6 +857,35 @@ def src_badge(source):
             f'border-radius:10px;font-size:10px;font-weight:bold;">{source}</span>')
 
 
+
+def traction_highlights_section(co):
+    """Renders standout traction signals if any were found during web research."""
+    highlights = co.get("traction_highlights", [])
+    # Filter out empty or generic "none found" entries
+    highlights = [h for h in highlights if h and len(h) > 10
+                  and "not found" not in h.lower()
+                  and "no specific" not in h.lower()
+                  and "limited info" not in h.lower()
+                  and "unknown" not in h.lower()]
+    if not highlights:
+        return ""
+    items = "".join(
+        f'<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:4px;">'
+        f'<span style="color:#c55a11;font-size:12px;">⚡</span>'
+        f'<span style="font-size:11px;color:#333;">{h}</span>'
+        f'</div>'
+        for h in highlights[:4]
+    )
+    return f"""
+    <div style="background:#fff8f0;border-left:3px solid #c55a11;border-radius:0 4px 4px 0;
+                padding:7px 10px;margin-bottom:10px;">
+      <div style="font-size:10px;color:#c55a11;font-weight:bold;margin-bottom:5px;">
+        ⚡ TRACTION SIGNALS
+      </div>
+      {items}
+    </div>"""
+
+
 def founder_section(co):
     """Renders founder info + LinkedIn button for high-scoring companies."""
     founder = co.get("founder", {})
@@ -906,6 +960,7 @@ def company_card(co):
         <div style="font-size:11px;color:#333;">{co.get('key_weakness','')}</div>
       </div>
     </div>
+    {traction_highlights_section(co)}
     {founder_section(co)}
   </div>
 </div>"""
@@ -1009,6 +1064,7 @@ def build_email(results, date_str, total_seen):
     {cards}
   </div>
   {below_section}
+  {outreach_table}
   <div style="text-align:center;color:#aaa;font-size:10px;margin-top:16px;
               padding-top:14px;border-top:1px solid #ddd;">
     Bryan Hanley · Second Layer VC Framework · Never repeats a company<br>
@@ -1016,6 +1072,58 @@ def build_email(results, date_str, total_seen):
   </div>
 </body></html>"""
 
+    # Founder outreach table — only passing companies with founder info
+    outreach_candidates = [
+        r for r in passing
+        if r.get("founder", {}).get("founder_name", "unknown") not in ["", "unknown"]
+    ]
+    if outreach_candidates:
+        rows = "".join(
+            f"<tr style='background:{'#fff' if i%2==0 else '#f9f9f9'};'>"
+            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>"
+            f"{r.get('company_name','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;'>"
+            f"{r.get('founder',{}).get('founder_name','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;color:#666;'>"
+            f"{r.get('founder',{}).get('founder_title','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;'>"
+            f"{r.get('vertical','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>"
+            f"{r.get('score_pct',0):.1f}%</td>"
+            f"<td style='padding:8px 12px;font-size:12px;'>"
+            + (f'<a href="{r.get("founder",{}).get("linkedin_url","")}" target="_blank" '
+               f'style="color:#0a66c2;font-weight:bold;text-decoration:none;">LinkedIn →</a>'
+               if r.get("founder",{}).get("linkedin_url","") not in ["","unknown"]
+               else '<span style="color:#aaa;">—</span>')
+            + f"</td></tr>"
+            for i, r in enumerate(outreach_candidates)
+        )
+        outreach_table = f"""
+<div style="margin-bottom:20px;">
+  <h2 style="color:#1b3a6b;font-size:15px;margin-bottom:8px;
+             border-bottom:2px solid #c55a11;padding-bottom:5px;">
+    👤 Founder Outreach List
+  </h2>
+  <p style="font-size:11px;color:#888;margin-bottom:10px;">
+    High-scoring companies with identified founders — ready for personalized outreach.
+  </p>
+  <table style="width:100%;border-collapse:collapse;background:white;
+                border-radius:6px;overflow:hidden;">
+    <tr style="background:#1b3a6b;">
+      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Company</th>
+      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Founder</th>
+      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Title</th>
+      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Vertical</th>
+      <th style="padding:8px 12px;color:white;font-size:11px;">Score</th>
+      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">LinkedIn</th>
+    </tr>
+    {rows}
+  </table>
+</div>"""
+    else:
+        outreach_table = ""
+
+    html = html.replace("{outreach_table}", outreach_table)
     return subject, html
 
 
