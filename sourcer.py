@@ -1001,38 +1001,41 @@ def build_email(results, date_str, total_seen):
              "<p style='color:#888;text-align:center;padding:30px;'>"
              "No companies met the threshold today — see filtered list below.</p>")
 
-    below_rows = "".join(
-        f"<tr style='background:{'#fff' if i%2==0 else '#f9f9f9'};'>"
-        f"<td style='padding:6px 10px;font-size:12px;'>{r.get('company_name','')}</td>"
-        f"<td style='padding:6px 10px;font-size:11px;'>{src_badge(r.get('source',''))}</td>"
-        f"<td style='padding:6px 10px;font-size:12px;color:#666;'>{r.get('vertical','')}</td>"
-        f"<td style='padding:6px 10px;font-size:12px;font-weight:bold;text-align:center;'>"
-        f"{r.get('score_pct',0):.1f}%</td>"
-        f"<td style='padding:6px 10px;font-size:12px;'>{r.get('decision','')}</td>"
-        f"<td style='padding:6px 10px;font-size:12px;color:#888;'>"
-        f"{r.get('key_weakness','')}</td>"
-        f"</tr>"
-        for i, r in enumerate(below)
-    )
-    below_section = f"""
-<div style="margin-bottom:20px;">
-  <h2 style="color:#666;font-size:13px;margin-bottom:8px;
-             border-bottom:1px solid #ddd;padding-bottom:5px;">
-    📊 Evaluated But Filtered (below {MIN_SCORE_PCT:.0f}%)
-  </h2>
-  <table style="width:100%;border-collapse:collapse;background:white;
-                border-radius:6px;overflow:hidden;">
-    <tr style="background:#1b3a6b;">
-      <th style="padding:7px 10px;color:white;font-size:11px;text-align:left;">Company</th>
-      <th style="padding:7px 10px;color:white;font-size:11px;text-align:left;">Source</th>
-      <th style="padding:7px 10px;color:white;font-size:11px;text-align:left;">Vertical</th>
-      <th style="padding:7px 10px;color:white;font-size:11px;">Score</th>
-      <th style="padding:7px 10px;color:white;font-size:11px;text-align:left;">Decision</th>
-      <th style="padding:7px 10px;color:white;font-size:11px;text-align:left;">Weakness</th>
-    </tr>
-    {below_rows}
-  </table>
-</div>""" if below else ""
+    below_row_parts = []
+    for i, r in enumerate(below):
+        bg = "#fff" if i % 2 == 0 else "#f9f9f9"
+        below_row_parts.append(
+            "<tr style='background:" + bg + ";'>"
+            "<td style='padding:6px 10px;font-size:12px;'>" + r.get('company_name','') + "</td>"
+            "<td style='padding:6px 10px;font-size:11px;'>" + src_badge(r.get('source','')) + "</td>"
+            "<td style='padding:6px 10px;font-size:12px;color:#666;'>" + r.get('vertical','') + "</td>"
+            "<td style='padding:6px 10px;font-size:12px;font-weight:bold;text-align:center;'>" + f"{r.get('score_pct',0):.1f}%" + "</td>"
+            "<td style='padding:6px 10px;font-size:12px;'>" + r.get('decision','') + "</td>"
+            "<td style='padding:6px 10px;font-size:12px;color:#888;'>" + r.get('key_weakness','') + "</td>"
+            "</tr>"
+        )
+    below_rows = "".join(below_row_parts)
+
+    if below:
+        below_section = (
+            "<div style='margin-bottom:20px;'>"
+            "<h2 style='color:#666;font-size:13px;margin-bottom:8px;"
+            "border-bottom:1px solid #ddd;padding-bottom:5px;'>"
+            "&#128202; Evaluated But Filtered (below " + f"{MIN_SCORE_PCT:.0f}" + "%)</h2>"
+            "<table style='width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;'>"
+            "<tr style='background:#1b3a6b;'>"
+            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Company</th>"
+            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Source</th>"
+            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Vertical</th>"
+            "<th style='padding:7px 10px;color:white;font-size:11px;'>Score</th>"
+            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Decision</th>"
+            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Weakness</th>"
+            "</tr>"
+            + below_rows +
+            "</table></div>"
+        )
+    else:
+        below_section = ""
 
 
     # Build outreach table BEFORE html string
