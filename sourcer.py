@@ -662,20 +662,18 @@ FAILS if it IS the dominant industry (an LLM itself, a crypto exchange).
 """
 
 SCORING_RUBRIC = """
-Score each factor 0-10. Conservative defaults: most companies 4-7.
-Reserve 8-10 for genuinely exceptional signals only.
-
-1A Founder-Market Fit (10%): 9=prior exit+deep domain, 7=strong background, 5=adjacent, 3=limited
-1B Technical Execution (8%): 9=working product proven builders, 7=solid prototype, 5=MVP, 3=struggling
-1C Founder Commitment (7%): 9=quit jobs+invested capital, 7=full-time committed, 5=recent, 3=side project
-2A Early PMF (12%): 9=users obsessed organic growth, 7=good engagement, 5=some users, 3=low engagement
-2B Revenue Signals (8%): 9=strong revenue proven econ, 7=some revenue, 5=paying pilots, 3=minimal
-3A TAM (12%): 9=$50B+, 7=$10-50B, 5=$1-10B, 3=$100M-$1B, 0=<$100M
-3B Timing/Competition (8%): 9=greenfield perfect timing, 7=good beatable comp, 5=crowded differentiated
-4 Traction Quantitative (7%): 9=>20%/wk, 7=10-20%, 5=5-10%, 3=<5%, 0=none
-5 Traction Qualitative (8%): 9=users devastated if gone, 7=strong NPS, 5=useful, 3=mixed
-6 Capital Efficiency (10%): 9=big product on <$100K, 7=efficient, 5=average, 3=capital intensive
-7 Investor Signal (10%): 9=Sequoia/a16z/YC, 7=tier-1/2 VC, 5=angels, 3=unknown, 0=red flags
+Score 0-10 per factor. Default 5 if unknown. Reserve 8-10 for exceptional only.
+1A FMF(10%): 9=exit+domain,7=strong bg,5=adjacent,3=limited
+1B Tech(8%): 9=working product,7=prototype,5=MVP,3=struggling
+1C Commit(7%): 9=quit job,7=fulltime,5=recent,3=side project
+2A PMF(12%): 9=obsessed users,7=good engage,5=some users,3=low
+2B Rev(8%): 9=strong rev,7=some rev,5=pilots,3=minimal,0=none
+3A TAM(12%): 9=$50B+,7=$10-50B,5=$1-10B,3=$100M-1B,0=<$100M
+3B Timing(8%): 9=greenfield,7=beatable comp,5=crowded,3=poor
+4 TrxQ(7%): 9=>20%wk,7=10-20%,5=5-10%,3=<5%,0=none
+5 TrxQl(8%): 9=devastated if gone,7=strong NPS,5=useful,3=mixed
+6 CapEff(10%): 9=big on<$100K,7=efficient,5=avg,3=intensive
+7 Investor(10%): 9=Seq/a16z/YC,7=tier1-2,5=angels,3=unknown
 """
 
 SCORE_PROMPT = """You are a VC analyst applying the Second Layer investment framework.
@@ -744,8 +742,13 @@ def score_company(co):
         stage      = data.get("stage", "").lower()
         stage_gate = data.get("stage_gate", "PASS").upper()
         late_stages = ["series b", "series c", "series d", "series e",
-                       "growth", "late stage", "pre-ipo"]
-        if stage_gate == "FAIL" or any(s in stage for s in late_stages):
+                       "late stage", "pre-ipo", "acquired", "merged"]
+        # Only fail if explicitly late stage — unknown/unconfirmed should pass through
+        is_late = any(s in stage for s in late_stages)
+        if stage_gate == "FAIL" and is_late:
+            print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown')})")
+            return None
+        elif is_late:
             print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown')})")
             return None
         if pct >= 85:   data["decision"] = "★★★★★ STRONG YES"
@@ -778,9 +781,10 @@ def score_company(co):
 
     # ── Attempt 2: Fallback to Haiku without web search ───────────────────────
     try:
+        time.sleep(5)  # Back off before fallback attempt
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1000,
+            max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
         raw = resp.content[0].text.strip()
@@ -789,7 +793,24 @@ def score_company(co):
             print(f"  (fallback scoring — no web search)")
             return result
     except Exception as e:
-        print(f"  Fallback scoring error {co['name']}: {e}")
+        if "429" in str(e) or "rate_limit" in str(e):
+            print(f"  Rate limited on fallback for {co['name']} — waiting 30s")
+            time.sleep(30)
+            try:
+                resp = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=800,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                raw = resp.content[0].text.strip()
+                result = _parse_and_validate(raw)
+                if result:
+                    print(f"  (retry fallback succeeded)")
+                    return result
+            except Exception as e2:
+                print(f"  Retry also failed for {co['name']}: {e2}")
+        else:
+            print(f"  Fallback scoring error {co['name']}: {e}")
 
     return None
 
@@ -1137,6 +1158,9 @@ def build_email(results, date_str, total_seen):
     else:
         outreach_table = ""
 
+    # Safety — ensure outreach_table is always defined
+    if 'outreach_table' not in dir():
+        outreach_table = ""
     html = html.replace("{outreach_table}", outreach_table)
     return subject, html
 
@@ -1192,7 +1216,7 @@ def main():
             print(f"  → {result.get('score_pct',0):.1f}% | {result.get('decision','')}")
         else:
             stage_gated += 1  # score_company returns None for stage gate fails too
-        time.sleep(1)
+        time.sleep(3)  # Longer delay to avoid rate limits with Sonnet web search
     print(f"Stage gated (removed): {stage_gated}")
 
     append_results_to_sheet(results, date_str)
