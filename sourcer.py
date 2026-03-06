@@ -727,40 +727,20 @@ def score_company(co):
         description=co.get("description", "No description available"),
         source=co.get("source", "Unknown"),
     )
-    try:
-        # Use web search so Claude can look up real info before scoring
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2000,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=[{"role": "user", "content": prompt}]
-        )
 
-        # Extract the final text response (after any tool use blocks)
-        raw = ""
-        for block in resp.content:
-            if hasattr(block, "type") and block.type == "text":
-                raw = block.text.strip()
-
-        if not raw:
-            print(f"  No text response for {co['name']}")
+    def _parse_and_validate(raw):
+        """Parse JSON from response and apply scoring logic."""
+        raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw.strip())
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not m:
             return None
-
-        raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw)
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if not match:
-            print(f"  No JSON found for {co['name']}")
-            return None
-
-        data   = json.loads(match.group())
+        data   = json.loads(m.group())
         scores = data.get("scores", {})
         ws     = sum(scores.get(k, 0) * v for k, v in WEIGHTS.items())
         pct    = ws * 10
         data["weighted_score"] = round(ws, 2)
         data["score_pct"]      = round(pct, 1)
         data["source"]         = co.get("source", "")
-
-        # Stage gate — drop Series B+ after Claude identifies actual stage
         stage      = data.get("stage", "").lower()
         stage_gate = data.get("stage_gate", "PASS").upper()
         late_stages = ["series b", "series c", "series d", "series e",
@@ -768,16 +748,50 @@ def score_company(co):
         if stage_gate == "FAIL" or any(s in stage for s in late_stages):
             print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown')})")
             return None
-
         if pct >= 85:   data["decision"] = "★★★★★ STRONG YES"
         elif pct >= 75: data["decision"] = "★★★★ YES"
         elif pct >= 65: data["decision"] = "★★★ DEEP DIVE"
         elif pct >= 55: data["decision"] = "★★ PROBABLY PASS"
         else:           data["decision"] = "★ HARD PASS"
         return data
+
+    # ── Attempt 1: Score with web search enabled ──────────────────────────────
+    try:
+        resp = client.messages.create(
+            model="claude-sonnet-4-5",  # Sonnet for web search (Haiku doesn't support it)
+            max_tokens=2000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": prompt}]
+        )
+        # Extract final text block after any tool use
+        raw = ""
+        for block in resp.content:
+            if hasattr(block, "type") and block.type == "text":
+                raw = block.text.strip()
+        if raw:
+            result = _parse_and_validate(raw)
+            if result:
+                print(f"  (web search used)")
+                return result
     except Exception as e:
-        print(f"  Scoring error {co['name']}: {e}")
-        return None
+        print(f"  Web search scoring failed for {co['name']}: {e} — falling back")
+
+    # ── Attempt 2: Fallback to Haiku without web search ───────────────────────
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = resp.content[0].text.strip()
+        result = _parse_and_validate(raw)
+        if result:
+            print(f"  (fallback scoring — no web search)")
+            return result
+    except Exception as e:
+        print(f"  Fallback scoring error {co['name']}: {e}")
+
+    return None
 
 
 
