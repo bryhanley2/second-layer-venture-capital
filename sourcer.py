@@ -1042,36 +1042,51 @@ def build_email(results, date_str, total_seen):
         if r.get("founder", {}).get("founder_name", "unknown") not in ["", "unknown"]
     ]
     if outreach_candidates:
-        rows = "".join(
-            f"<tr style='background:{'#fff' if i%2==0 else '#f9f9f9'};'>"
-            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{r.get('company_name','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;'>{r.get('founder',{}).get('founder_name','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;color:#666;'>{r.get('founder',{}).get('founder_title','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;'>{r.get('vertical','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{r.get('score_pct',0):.1f}%</td>"
-            + (f'<a href="{r.get("founder",{}).get("linkedin_url","")}" target="_blank" '
-               f'style="color:#0a66c2;font-weight:bold;text-decoration:none;">LinkedIn \u2192</a>'
-               if r.get("founder",{}).get("linkedin_url","") not in ["","unknown"]
-               else '<span style="color:#aaa;">\u2014</span>')
-            + "</td></tr>"
-            for i, r in enumerate(outreach_candidates)
+        row_parts = []
+        for i, r in enumerate(outreach_candidates):
+            bg        = "#fff" if i % 2 == 0 else "#f9f9f9"
+            name      = r.get("company_name", "")
+            founder   = r.get("founder", {})
+            fn        = founder.get("founder_name", "")
+            ft        = founder.get("founder_title", "")
+            vertical  = r.get("vertical", "")
+            score     = f"{r.get('score_pct', 0):.1f}%"
+            li_url    = founder.get("linkedin_url", "")
+            if li_url and li_url != "unknown":
+                li_btn = f'<a href="{li_url}" target="_blank" style="color:#0a66c2;font-weight:bold;text-decoration:none;">LinkedIn &#8594;</a>'
+            else:
+                li_btn = '<span style="color:#aaa;">&#8212;</span>'
+            row_parts.append(
+                f"<tr style='background:{bg};'>"
+                f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{name}</td>"
+                f"<td style='padding:8px 12px;font-size:12px;'>{fn}</td>"
+                f"<td style='padding:8px 12px;font-size:12px;color:#666;'>{ft}</td>"
+                f"<td style='padding:8px 12px;font-size:12px;'>{vertical}</td>"
+                f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{score}</td>"
+                f"<td style='padding:8px 12px;font-size:12px;'>{li_btn}</td>"
+                f"</tr>"
+            )
+        rows = "".join(row_parts)
+        outreach_table = (
+            "<div style='margin-bottom:20px;'>"
+            "<h2 style='color:#1b3a6b;font-size:15px;margin-bottom:8px;"
+            "border-bottom:2px solid #c55a11;padding-bottom:5px;'>"
+            "&#128100; Founder Outreach List</h2>"
+            "<p style='font-size:11px;color:#888;margin-bottom:10px;'>"
+            "High-scoring companies with identified founders.</p>"
+            "<table style='width:100%;border-collapse:collapse;background:white;"
+            "border-radius:6px;overflow:hidden;'>"
+            "<tr style='background:#1b3a6b;'>"
+            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Company</th>"
+            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Founder</th>"
+            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Title</th>"
+            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Vertical</th>"
+            "<th style='padding:8px 12px;color:white;font-size:11px;'>Score</th>"
+            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>LinkedIn</th>"
+            "</tr>"
+            + rows +
+            "</table></div>"
         )
-        outreach_table = f"""
-<div style='margin-bottom:20px;'>
-  <h2 style='color:#1b3a6b;font-size:15px;margin-bottom:8px;border-bottom:2px solid #c55a11;padding-bottom:5px;'>&#128100; Founder Outreach List</h2>
-  <p style='font-size:11px;color:#888;margin-bottom:10px;'>High-scoring companies with identified founders.</p>
-  <table style='width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;'>
-    <tr style='background:#1b3a6b;'>
-      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Company</th>
-      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Founder</th>
-      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Title</th>
-      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Vertical</th>
-      <th style='padding:8px 12px;color:white;font-size:11px;'>Score</th>
-      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>LinkedIn</th>
-    </tr>
-    {rows}
-  </table>
-</div>"""
 
     # Build html using string concatenation — avoids f-string variable scoping issues
     html = (
