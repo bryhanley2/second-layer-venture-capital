@@ -727,9 +727,8 @@ def score_company(co):
     )
 
     def _parse_and_validate(raw):
-        """Parse JSON from response and apply scoring logic."""
         raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw.strip())
-        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
             return None
         data   = json.loads(m.group())
@@ -740,15 +739,9 @@ def score_company(co):
         data["score_pct"]      = round(pct, 1)
         data["source"]         = co.get("source", "")
         stage      = data.get("stage", "").lower()
-        stage_gate = data.get("stage_gate", "PASS").upper()
         late_stages = ["series b", "series c", "series d", "series e",
                        "late stage", "pre-ipo", "acquired", "merged"]
-        # Only fail if explicitly late stage — unknown/unconfirmed should pass through
-        is_late = any(s in stage for s in late_stages)
-        if stage_gate == "FAIL" and is_late:
-            print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown')})")
-            return None
-        elif is_late:
+        if any(s in stage for s in late_stages):
             print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown')})")
             return None
         if pct >= 85:   data["decision"] = "★★★★★ STRONG YES"
@@ -758,30 +751,35 @@ def score_company(co):
         else:           data["decision"] = "★ HARD PASS"
         return data
 
-    # ── Attempt 1: Score with web search enabled ──────────────────────────────
-    try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-5",  # Sonnet for web search (Haiku doesn't support it)
-            max_tokens=2000,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=[{"role": "user", "content": prompt}]
-        )
-        # Extract final text block after any tool use
-        raw = ""
-        for block in resp.content:
-            if hasattr(block, "type") and block.type == "text":
-                raw = block.text.strip()
-        if raw:
+    # Attempt 1: Claude Sonnet (better reasoning, no web search overhead)
+    for attempt in range(2):
+        try:
+            if attempt > 0:
+                print(f"  Retrying after rate limit pause...")
+                time.sleep(30)
+            resp = client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            raw = resp.content[0].text.strip()
             result = _parse_and_validate(raw)
             if result:
-                print(f"  (web search used)")
                 return result
-    except Exception as e:
-        print(f"  Web search scoring failed for {co['name']}: {e} — falling back")
+            break
+        except Exception as e:
+            if "429" in str(e) or "rate_limit" in str(e):
+                if attempt == 0:
+                    print(f"  Rate limited — pausing 30s")
+                    continue
+                print(f"  Rate limit persists — falling back to Haiku")
+            else:
+                print(f"  Sonnet error {co['name']}: {e}")
+                break
 
-    # ── Attempt 2: Fallback to Haiku without web search ───────────────────────
+    # Attempt 2: Haiku fallback
     try:
-        time.sleep(5)  # Back off before fallback attempt
+        time.sleep(5)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
@@ -790,31 +788,12 @@ def score_company(co):
         raw = resp.content[0].text.strip()
         result = _parse_and_validate(raw)
         if result:
-            print(f"  (fallback scoring — no web search)")
+            print(f"  (Haiku fallback)")
             return result
     except Exception as e:
-        if "429" in str(e) or "rate_limit" in str(e):
-            print(f"  Rate limited on fallback for {co['name']} — waiting 30s")
-            time.sleep(30)
-            try:
-                resp = client.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=800,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                raw = resp.content[0].text.strip()
-                result = _parse_and_validate(raw)
-                if result:
-                    print(f"  (retry fallback succeeded)")
-                    return result
-            except Exception as e2:
-                print(f"  Retry also failed for {co['name']}: {e2}")
-        else:
-            print(f"  Fallback scoring error {co['name']}: {e}")
+        print(f"  Haiku fallback error {co['name']}: {e}")
 
     return None
-
-
 
 
 # ── FOUNDER RESEARCH ──────────────────────────────────────────────────────────
@@ -1055,6 +1034,45 @@ def build_email(results, date_str, total_seen):
   </table>
 </div>""" if below else ""
 
+
+    # Build outreach table BEFORE html string
+    outreach_table = ""
+    outreach_candidates = [
+        r for r in passing
+        if r.get("founder", {}).get("founder_name", "unknown") not in ["", "unknown"]
+    ]
+    if outreach_candidates:
+        rows = "".join(
+            f"<tr style='background:{'#fff' if i%2==0 else '#f9f9f9'};'>"
+            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{r.get('company_name','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;'>{r.get('founder',{}).get('founder_name','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;color:#666;'>{r.get('founder',{}).get('founder_title','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;'>{r.get('vertical','')}</td>"
+            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{r.get('score_pct',0):.1f}%</td>"
+            + (f'<a href="{r.get("founder",{}).get("linkedin_url","")}" target="_blank" '
+               f'style="color:#0a66c2;font-weight:bold;text-decoration:none;">LinkedIn \u2192</a>'
+               if r.get("founder",{}).get("linkedin_url","") not in ["","unknown"]
+               else '<span style="color:#aaa;">\u2014</span>')
+            + "</td></tr>"
+            for i, r in enumerate(outreach_candidates)
+        )
+        outreach_table = f"""
+<div style='margin-bottom:20px;'>
+  <h2 style='color:#1b3a6b;font-size:15px;margin-bottom:8px;border-bottom:2px solid #c55a11;padding-bottom:5px;'>&#128100; Founder Outreach List</h2>
+  <p style='font-size:11px;color:#888;margin-bottom:10px;'>High-scoring companies with identified founders.</p>
+  <table style='width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;'>
+    <tr style='background:#1b3a6b;'>
+      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Company</th>
+      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Founder</th>
+      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Title</th>
+      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Vertical</th>
+      <th style='padding:8px 12px;color:white;font-size:11px;'>Score</th>
+      <th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>LinkedIn</th>
+    </tr>
+    {rows}
+  </table>
+</div>"""
+
     html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:Arial,sans-serif;max-width:840px;margin:0 auto;
              background:#f4f6f9;padding:20px;">
@@ -1099,70 +1117,13 @@ def build_email(results, date_str, total_seen):
     {cards}
   </div>
   {below_section}
-  {outreach_table}
+  {OUTREACH_PLACEHOLDER}
   <div style="text-align:center;color:#aaa;font-size:10px;margin-top:16px;
               padding-top:14px;border-top:1px solid #ddd;">
     Bryan Hanley · Second Layer VC Framework · Never repeats a company<br>
     Sources: YC (6 batches) · HN · SEC Form D · RSS Feeds · Claude Research · GitHub
   </div>
 </body></html>"""
-
-    # Founder outreach table — only passing companies with founder info
-    outreach_candidates = [
-        r for r in passing
-        if r.get("founder", {}).get("founder_name", "unknown") not in ["", "unknown"]
-    ]
-    if outreach_candidates:
-        rows = "".join(
-            f"<tr style='background:{'#fff' if i%2==0 else '#f9f9f9'};'>"
-            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>"
-            f"{r.get('company_name','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;'>"
-            f"{r.get('founder',{}).get('founder_name','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;color:#666;'>"
-            f"{r.get('founder',{}).get('founder_title','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;'>"
-            f"{r.get('vertical','')}</td>"
-            f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>"
-            f"{r.get('score_pct',0):.1f}%</td>"
-            f"<td style='padding:8px 12px;font-size:12px;'>"
-            + (f'<a href="{r.get("founder",{}).get("linkedin_url","")}" target="_blank" '
-               f'style="color:#0a66c2;font-weight:bold;text-decoration:none;">LinkedIn →</a>'
-               if r.get("founder",{}).get("linkedin_url","") not in ["","unknown"]
-               else '<span style="color:#aaa;">—</span>')
-            + f"</td></tr>"
-            for i, r in enumerate(outreach_candidates)
-        )
-        outreach_table = f"""
-<div style="margin-bottom:20px;">
-  <h2 style="color:#1b3a6b;font-size:15px;margin-bottom:8px;
-             border-bottom:2px solid #c55a11;padding-bottom:5px;">
-    👤 Founder Outreach List
-  </h2>
-  <p style="font-size:11px;color:#888;margin-bottom:10px;">
-    High-scoring companies with identified founders — ready for personalized outreach.
-  </p>
-  <table style="width:100%;border-collapse:collapse;background:white;
-                border-radius:6px;overflow:hidden;">
-    <tr style="background:#1b3a6b;">
-      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Company</th>
-      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Founder</th>
-      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Title</th>
-      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">Vertical</th>
-      <th style="padding:8px 12px;color:white;font-size:11px;">Score</th>
-      <th style="padding:8px 12px;color:white;font-size:11px;text-align:left;">LinkedIn</th>
-    </tr>
-    {rows}
-  </table>
-</div>"""
-    else:
-        outreach_table = ""
-
-    # Safety — ensure outreach_table is always defined
-    if 'outreach_table' not in dir():
-        outreach_table = ""
-    html = html.replace("{outreach_table}", outreach_table)
-    return subject, html
 
 
 # ── SEND EMAIL ────────────────────────────────────────────────────────────────
