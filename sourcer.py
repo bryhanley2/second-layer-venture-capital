@@ -1073,57 +1073,37 @@ def build_email(results, date_str, total_seen):
   </table>
 </div>"""
 
-    html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
-<body style="font-family:Arial,sans-serif;max-width:840px;margin:0 auto;
-             background:#f4f6f9;padding:20px;">
-  <div style="background:#1b3a6b;border-radius:10px 10px 0 0;padding:22px 26px;">
-    <div style="color:white;font-size:20px;font-weight:bold;">
-      🔍 Second Layer VC Pipeline
-    </div>
-    <div style="color:#aac4e8;font-size:12px;margin-top:3px;">
-      {date_str} · Daily Digest
-    </div>
-    <div style="color:#d6e4f7;font-size:11px;margin-top:6px;">
-      Sources today: {src_summary}
-    </div>
-  </div>
-  <div style="background:#2e75b6;padding:12px 26px;display:flex;gap:24px;margin-bottom:18px;">
-    <div style="text-align:center;">
-      <div style="color:white;font-size:22px;font-weight:bold;">{n_total}</div>
-      <div style="color:#aac4e8;font-size:10px;">TODAY</div>
-    </div>
-    <div style="text-align:center;">
-      <div style="color:#c6efce;font-size:22px;font-weight:bold;">{n_passing}</div>
-      <div style="color:#aac4e8;font-size:10px;">PASSING ≥{MIN_SCORE_PCT:.0f}%</div>
-    </div>
-    <div style="text-align:center;">
-      <div style="color:#ffc7ce;font-size:22px;font-weight:bold;">{n_total-n_passing}</div>
-      <div style="color:#aac4e8;font-size:10px;">FILTERED</div>
-    </div>
-    <div style="text-align:center;">
-      <div style="color:#ffeb9c;font-size:22px;font-weight:bold;">{pass_rate:.0f}%</div>
-      <div style="color:#aac4e8;font-size:10px;">PASS RATE</div>
-    </div>
-    <div style="text-align:center;border-left:1px solid #5a9fd4;padding-left:24px;">
-      <div style="color:white;font-size:22px;font-weight:bold;">{total_seen}</div>
-      <div style="color:#aac4e8;font-size:10px;">TOTAL PIPELINE</div>
-    </div>
-  </div>
-  <div style="margin-bottom:22px;">
-    <h2 style="color:#1b3a6b;font-size:15px;margin-bottom:12px;
-               border-bottom:2px solid #2e75b6;padding-bottom:5px;">
-      ✅ Meeting Threshold (≥{MIN_SCORE_PCT:.0f}%)
-    </h2>
-    {cards}
-  </div>
-  {below_section}
-  {OUTREACH_PLACEHOLDER}
-  <div style="text-align:center;color:#aaa;font-size:10px;margin-top:16px;
-              padding-top:14px;border-top:1px solid #ddd;">
-    Bryan Hanley · Second Layer VC Framework · Never repeats a company<br>
-    Sources: YC (6 batches) · HN · SEC Form D · RSS Feeds · Claude Research · GitHub
-  </div>
-</body></html>"""
+    # Build html using string concatenation — avoids f-string variable scoping issues
+    html = (
+        '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+        '<body style="font-family:Arial,sans-serif;max-width:840px;margin:0 auto;background:#f4f6f9;padding:20px;">'
+        '<div style="background:#1b3a6b;border-radius:10px 10px 0 0;padding:22px 26px;">'
+        '<div style="color:white;font-size:20px;font-weight:bold;">&#128269; Second Layer VC Pipeline</div>'
+        '<div style="color:#aac4e8;font-size:12px;margin-top:3px;">' + date_str + ' &middot; Daily Digest</div>'
+        '<div style="color:#d6e4f7;font-size:11px;margin-top:6px;">Sources today: ' + src_summary + '</div>'
+        '</div>'
+        '<div style="background:#2e75b6;padding:12px 26px;display:flex;gap:24px;margin-bottom:18px;">'
+        '<div style="text-align:center;"><div style="color:white;font-size:22px;font-weight:bold;">' + str(n_total) + '</div><div style="color:#aac4e8;font-size:10px;">TODAY</div></div>'
+        '<div style="text-align:center;"><div style="color:#c6efce;font-size:22px;font-weight:bold;">' + str(n_passing) + '</div><div style="color:#aac4e8;font-size:10px;">PASSING</div></div>'
+        '<div style="text-align:center;"><div style="color:#ffc7ce;font-size:22px;font-weight:bold;">' + str(n_total - n_passing) + '</div><div style="color:#aac4e8;font-size:10px;">FILTERED</div></div>'
+        '<div style="text-align:center;"><div style="color:#ffeb9c;font-size:22px;font-weight:bold;">' + f"{pass_rate:.0f}%" + '</div><div style="color:#aac4e8;font-size:10px;">PASS RATE</div></div>'
+        '<div style="text-align:center;border-left:1px solid #5a9fd4;padding-left:24px;"><div style="color:white;font-size:22px;font-weight:bold;">' + str(total_seen) + '</div><div style="color:#aac4e8;font-size:10px;">TOTAL PIPELINE</div></div>'
+        '</div>'
+        '<div style="margin-bottom:22px;">'
+        '<h2 style="color:#1b3a6b;font-size:15px;margin-bottom:12px;border-bottom:2px solid #2e75b6;padding-bottom:5px;">'
+        '&#9989; Meeting Threshold (&ge;' + f"{MIN_SCORE_PCT:.0f}" + '%)</h2>'
+        + cards +
+        '</div>'
+        + below_section
+        + outreach_table +
+        '<div style="text-align:center;color:#aaa;font-size:10px;margin-top:16px;padding-top:14px;border-top:1px solid #ddd;">'
+        'Bryan Hanley &middot; Second Layer VC Framework &middot; Never repeats a company<br>'
+        'Sources: YC (9 batches) &middot; HN &middot; SEC Form D &middot; RSS &middot; Claude Research &middot; GitHub &middot; Newsletters &middot; BetaList'
+        '</div>'
+        '</body></html>'
+    )
+
+    return subject, html
 
 
 # ── SEND EMAIL ────────────────────────────────────────────────────────────────
