@@ -23,7 +23,8 @@ ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 EMAIL_SENDER      = os.environ["EMAIL_SENDER"]
 EMAIL_PASSWORD    = os.environ["EMAIL_PASSWORD"]
 EMAIL_RECIPIENT   = os.environ["EMAIL_RECIPIENT"]
-MIN_SCORE_PCT     = float(os.environ.get("MIN_SCORE_PCT", "65"))
+MIN_SCORE_PCT      = float(os.environ.get("MIN_SCORE_PCT", "65"))
+CRUNCHBASE_API_KEY = os.environ.get("CRUNCHBASE_API_KEY", "")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -33,6 +34,7 @@ HEADERS = {
 }
 
 SECOND_LAYER_KEYWORDS = [
+    # B2B compliance / regtech
     "compliance", "aml", "kyc", "kyb", "fraud", "regtech", "regulatory",
     "anti-money laundering", "financial crime", "sanctions", "fintech",
     "hipaa", "health", "healthcare", "clinical", "medical", "prior auth",
@@ -48,6 +50,17 @@ SECOND_LAYER_KEYWORDS = [
     "trade", "tariff", "customs",
     "monitoring", "detection", "verification", "identity",
     "automation", "workflow", "infrastructure",
+    # Consumer Second Layer — downstream of dominant trends
+    "personal finance", "debt", "credit score", "subscription management",
+    "benefits navigation", "health navigation", "patient advocate",
+    "data broker", "data deletion", "personal data",
+    "deepfake", "ai detection", "content authenticity",
+    "creator tools", "creator monetization", "creator compliance",
+    "mental health", "burnout", "wellness",
+    "career", "job search", "resume", "salary negotiation",
+    "rental", "tenant rights", "housing",
+    "consumer protection", "dispute resolution", "chargebacks",
+    "digital literacy", "scam detection", "phishing consumer",
 ]
 
 # Words that indicate it's a fund/investor, not a startup
@@ -86,13 +99,13 @@ def source_yc():
     try:
         day = datetime.date.today().weekday()
         all_terms = [
-            "compliance security", "fraud detection",
+            "compliance", "security", "fraud",
             "healthcare AI", "clinical workflow",
-            "legal technology", "contract automation",
-            "fintech risk", "identity verification",
-            "data privacy", "AI governance",
-            "supply chain risk", "insurance tech",
-            "cybersecurity detection", "regulatory automation",
+            "legal", "contract",
+            "fintech risk", "identity",
+            "privacy", "governance",
+            "supply chain", "insurance",
+            "cybersecurity", "regulatory",
         ]
         terms   = [all_terms[(day * 2) % len(all_terms)],
                    all_terms[(day * 2 + 1) % len(all_terms)]]
@@ -113,7 +126,13 @@ def source_yc():
                     },
                     timeout=15,
                 )
-                for hit in resp.json().get("results", [{}])[0].get("hits", []):
+                if resp.status_code != 200:
+                    print(f"YC API error: {resp.status_code} — {resp.text[:100]}")
+                    continue
+                results = resp.json().get("results", [])
+                if not results:
+                    continue
+                for hit in results[0].get("hits", []):
                     name = hit.get("name", "")
                     desc = hit.get("one_liner", "") or hit.get("long_description", "")
                     if name and is_relevant(f"{name} {desc}") and not is_fund(name):
@@ -204,96 +223,123 @@ def source_hacker_news():
 # ── SOURCE 3: SEC EDGAR FORM D — startups only ────────────────────────────────
 def source_sec_form_d():
     """
-    Pulls Form D filings but filters out funds/investment vehicles.
-    Also filters by small raise amounts ($500K–$10M = seed stage).
+    Pulls recent Form D filings from SEC EDGAR full-text search.
+    Filters to small raises ($500K-$10M) to target seed stage.
     """
     companies = []
     try:
         today     = datetime.date.today()
-        date_from = (today - datetime.timedelta(days=10)).strftime("%Y-%m-%d")
+        date_from = (today - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
         day       = today.weekday()
         terms = [
-            "software compliance", "healthcare technology platform",
-            "cybersecurity software", "legal technology software",
-            "financial technology platform", "insurance technology",
-            "data privacy software", "AI compliance platform",
+            "software", "technology platform",
+            "cybersecurity", "healthcare technology",
+            "financial technology", "insurance technology",
+            "data privacy", "artificial intelligence",
         ]
         term = terms[day % len(terms)]
 
-        url = (f"https://efts.sec.gov/LATEST/search-index"
-               f"?q=%22{requests.utils.quote(term)}%22"
-               f"&dateRange=custom&startdt={date_from}&forms=D")
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        hits = resp.json().get("hits", {}).get("hits", [])
+        # Correct EDGAR full-text search endpoint
+        url = (f"https://efts.sec.gov/LATEST/search-index?"
+               f"q=%22{requests.utils.quote(term)}%22"
+               f"&dateRange=custom&startdt={date_from}&forms=D&hits.hits._source=period_of_report,entity_name,file_num")
+        headers = dict(HEADERS)
+        headers["User-Agent"] = "SecondLayerVC research@example.com"
+        resp = requests.get(url, headers=headers, timeout=20)
 
-        for hit in hits[:15]:
+        if resp.status_code != 200:
+            # Fallback: use the standard EDGAR search
+            url2 = (f"https://efts.sec.gov/LATEST/search-index?"
+                    f"q=%22{requests.utils.quote(term)}%22"
+                    f"&forms=D&dateRange=custom&startdt={date_from}")
+            resp = requests.get(url2, headers=headers, timeout=20)
+
+        data = resp.json()
+        hits = data.get("hits", {}).get("hits", [])
+
+        for hit in hits[:20]:
             src  = hit.get("_source", {})
-            name = src.get("entity_name", "") or (src.get("display_names") or [""])[0]
+            # Try multiple name fields
+            name = (src.get("entity_name") or
+                    src.get("entityName") or
+                    (src.get("display_names") or [""])[0] or "")
+            name = name.strip()
 
-            # Skip funds, LPs, and investment vehicles
-            if not name or len(name) < 3:
+            if not name or len(name) < 3 or len(name) > 60:
                 continue
             if is_fund(name):
                 continue
-            # Skip names with CIK numbers in them (artifacts from our previous run)
-            if "CIK" in name or re.search(r"\b\d{10}\b", name):
+            if re.search(r"\b\d{7,}\b", name):  # Skip CIK-like numbers
                 continue
-            # Skip very long names (usually legal entities, not startups)
-            if len(name) > 60:
+            # Skip obvious non-startups
+            skip_patterns = ["LLC", "LP", "L.P.", "FUND", "PARTNERS", "CAPITAL",
+                             "HOLDINGS", "GROUP", "VENTURES", "MANAGEMENT"]
+            if any(p in name.upper() for p in skip_patterns):
                 continue
 
             companies.append({
                 "name": name,
-                "description": f"SEC Form D filing — {term}",
+                "description": f"SEC Form D filing — {term} — early stage raise",
                 "source": "SEC Form D",
             })
 
         print(f"SEC Form D: {len(companies)} candidates")
     except Exception as e:
         print(f"SEC Form D error: {e}")
-    return companies[:5]
+    return companies[:6]
 
 
 # ── SOURCE 4: MULTIPLE RSS FEEDS ─────────────────────────────────────────────
 def source_rss_feeds():
     """
-    Parses multiple reliable RSS feeds for funding/launch news.
-    All public RSS — no scraping, no blocking.
+    Parses reliable public RSS feeds for seed/early funding news.
+    Feeds verified as working and publicly accessible.
     """
     companies = []
     feeds = [
         ("https://techcrunch.com/feed/", "TechCrunch"),
         ("https://venturebeat.com/feed/", "VentureBeat"),
-        ("https://www.theinformation.com/feed", "The Information"),
-        ("https://feeds.feedburner.com/venturebeat/SZYF", "VentureBeat Alt"),
+        ("https://www.wired.com/feed/rss", "Wired"),
+        ("https://feeds.feedburner.com/TechCrunch", "TechCrunch Alt"),
     ]
-
     funding_words = ["raises", "funding", "seed", "series a", "launches",
-                     "secures", "closes", "backed", "invests"]
+                     "secures", "closes", "backed", "invests", "pre-seed"]
+    skip_words    = ["series b", "series c", "series d", "series e",
+                     "$50m", "$75m", "$100m", "$50 million", "$100 million"]
 
     for feed_url, feed_name in feeds:
         try:
             resp = requests.get(feed_url, headers=HEADERS, timeout=15)
-            root = ET.fromstring(resp.content)
+            if resp.status_code != 200:
+                continue
+            # Strip problematic XML entities before parsing
+            content = resp.content.replace(b"&", b"&amp;").replace(b"&amp;amp;", b"&amp;")
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                continue
             for item in root.findall(".//item"):
-                title = item.findtext("title", "")
+                title = item.findtext("title", "") or ""
                 desc  = item.findtext("description", "") or ""
-                combined = f"{title} {BeautifulSoup(desc, 'html.parser').get_text()}"
+                text  = BeautifulSoup(desc, "html.parser").get_text()
+                combined = title + " " + text
 
                 if not any(w in title.lower() for w in funding_words):
+                    continue
+                if any(w in combined.lower() for w in skip_words):
                     continue
                 if not is_relevant(combined):
                     continue
 
+                # Looser regex — just grab first 1-4 capitalized words before a verb
                 match = re.match(
-                    r"^([A-Z][A-Za-z0-9\.\-\s]{2,28?}?)\s+"
-                    r"(?:raises|secures|closes|gets|lands|launches|announces)",
+                    r"^([A-Z][A-Za-z0-9][A-Za-z0-9\.\- ]{1,40}?)\s+"
+                    r"(?:raises|secures|closes|gets|lands|launches|announces|nabs|scores)",
                     title
                 )
                 if match:
-                    name = match.group(1).strip()
-                    if (name and not is_fund(name) and len(name) > 3
-                            and not is_late_stage(title)):
+                    name = match.group(1).strip().rstrip(".,")
+                    if name and not is_fund(name) and 3 < len(name) < 50 and not is_late_stage(title):
                         companies.append({
                             "name": name,
                             "description": title,
@@ -304,7 +350,7 @@ def source_rss_feeds():
             print(f"RSS {feed_name} error: {e}")
 
     print(f"RSS Feeds: {len(companies)} candidates")
-    return companies[:6]
+    return companies[:8]
 
 
 # ── SOURCE 5: CLAUDE-ASSISTED RESEARCH ───────────────────────────────────────
@@ -318,6 +364,7 @@ def source_claude_research():
     try:
         day = datetime.date.today().weekday()
         verticals = [
+            # B2B Second Layer
             "AML/KYC compliance automation for fintech",
             "HIPAA-compliant AI workflow tools for healthcare",
             "AI governance and model risk management",
@@ -325,23 +372,38 @@ def source_claude_research():
             "cybersecurity threat detection and response",
             "data privacy and PII compliance automation",
             "supply chain risk and SBOM management",
+            # Consumer Second Layer
+            "consumer personal finance tools solving complexity created by fintech expansion",
+            "consumer health navigation apps solving fragmentation from healthcare digitization",
+            "personal data privacy tools solving problems created by data broker proliferation",
+            "consumer AI detection and trust tools solving problems created by generative AI",
+            "creator economy infrastructure and compliance tools for the creator economy boom",
+            "consumer career and income tools solving instability from remote work and AI displacement",
         ]
         vertical = verticals[day % len(verticals)]
 
-        prompt = f"""You are a VC researcher specializing in seed-stage B2B SaaS.
+        is_consumer = "consumer" in vertical.lower() or "creator" in vertical.lower()
+        focus = "B2C consumer" if is_consumer else "B2B SaaS"
+        extra = (
+            "- Consumer-facing app or tool (not B2B)\n"
+            "- Solves a real downstream problem created by a dominant industry trend\n"
+            "- Has a clear Second Layer logic: [dominant trend] → [problem for consumers] → [this solution]\n"
+        ) if is_consumer else (
+            "- B2B focus\n"
+            "- Genuinely solving a Second Layer problem (not being IN the dominant industry)\n"
+        )
+
+        prompt = f"""You are a VC researcher specializing in seed-stage {focus} startups.
 
 Today's vertical: {vertical}
 
-List exactly 10 real startups in this vertical that solve a downstream compliance, 
-risk, or infrastructure problem created by a dominant industry trend.
+List exactly 10 real startups in this vertical that solve a downstream problem created by a dominant industry trend.
 
 STRICT Requirements:
 - Must be real companies you know about
 - Founded 2019-2025
 - ONLY Seed or Series A stage — absolutely no Series B, C, D or later
-- B2B focus
-- Genuinely solving a Second Layer problem (not being IN the dominant industry)
-- Prioritize lesser-known companies over well-known ones
+{extra}- Prioritize lesser-known companies over well-known ones
 
 Respond ONLY with a JSON array, no other text:
 [
@@ -434,20 +496,15 @@ def source_github_search():
 def source_newsletters():
     """
     Parses high-signal early-stage startup newsletters via RSS.
-    These surface companies before TechCrunch picks them up.
-    - TLDR: daily tech newsletter, covers seed/early funding
-    - StrictlyVC: daily VC newsletter focused on early stage
-    - The Hustle: startup and business news
-    - SaaStr: B2B SaaS focused
-    - Crunchbase News: funding-focused, often seed rounds
+    Only feeds verified as publicly accessible without auth.
     """
     companies = []
     feeds = [
-        ("https://tldr.tech/rss", "TLDR"),
-        ("https://strictlyvc.com/feed/", "StrictlyVC"),
         ("https://news.crunchbase.com/feed/", "Crunchbase News"),
         ("https://www.saastr.com/feed/", "SaaStr"),
-        ("https://thehustle.co/feed/", "The Hustle"),
+        ("https://strictlyvc.com/feed/", "StrictlyVC"),
+        ("https://www.businessinsider.com/sai/rss", "Business Insider Tech"),
+        ("https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "WSJ Markets"),
     ]
     funding_words = ["raises", "funding", "seed", "series a", "launches",
                      "secures", "closes", "backed", "invests", "pre-seed"]
@@ -459,12 +516,17 @@ def source_newsletters():
             resp = requests.get(feed_url, headers=HEADERS, timeout=15)
             if resp.status_code != 200:
                 continue
-            root = ET.fromstring(resp.content)
+            # Sanitize XML before parsing to avoid entity errors
+            content = resp.content.replace(b"&", b"&amp;").replace(b"&amp;amp;", b"&amp;")
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                continue
             for item in root.findall(".//item"):
-                title = item.findtext("title", "")
+                title = item.findtext("title", "") or ""
                 desc  = item.findtext("description", "") or ""
                 text  = BeautifulSoup(desc, "html.parser").get_text()
-                combined = f"{title} {text}"
+                combined = title + " " + text
 
                 if not any(w in title.lower() for w in funding_words):
                     continue
@@ -474,13 +536,13 @@ def source_newsletters():
                     continue
 
                 match = re.match(
-                    r"^([A-Z][A-Za-z0-9\.\-\s]{2,28?}?)\s+"
+                    r"^([A-Z][A-Za-z0-9][A-Za-z0-9\.\- ]{1,40}?)\s+"
                     r"(?:raises|secures|closes|gets|lands|launches|announces|nabs)",
                     title
                 )
                 if match:
-                    name = match.group(1).strip()
-                    if name and not is_fund(name) and len(name) > 3:
+                    name = match.group(1).strip().rstrip(".,")
+                    if name and not is_fund(name) and 3 < len(name) < 50:
                         companies.append({
                             "name": name,
                             "description": title,
@@ -497,42 +559,41 @@ def source_newsletters():
 # ── SOURCE 8: WELLFOUND (ANGELLIST) JOB POSTINGS ─────────────────────────────
 def source_wellfound():
     """
-    Scrapes Wellfound for seed/pre-seed companies actively hiring.
-    A company posting its first engineering job = likely just raised seed.
-    Uses their public job search — no auth needed.
+    ProductHunt RSS for newly launched B2B/SaaS products.
+    Wellfound blocks scrapers so replaced with ProductHunt which has a public feed.
+    Pre-launch/new products = pre-seed signal.
     """
     companies = []
     try:
-        day     = datetime.date.today().weekday()
-        # Role types that signal seed-stage Second Layer companies
-        roles = [
-            "compliance engineer", "security engineer",
-            "healthcare engineer", "legal tech",
-            "fintech engineer", "privacy engineer",
-            "risk platform", "regtech engineer",
+        feeds = [
+            ("https://www.producthunt.com/feed?category=developer-tools", "ProductHunt Dev"),
+            ("https://www.producthunt.com/feed?category=saas", "ProductHunt SaaS"),
         ]
-        role = roles[day % len(roles)]
+        for feed_url, feed_name in feeds:
+            resp = requests.get(feed_url, headers=HEADERS, timeout=15)
+            if resp.status_code != 200:
+                continue
+            content = resp.content.replace(b"&", b"&amp;").replace(b"&amp;amp;", b"&amp;")
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                continue
+            for item in root.findall(".//item"):
+                title = item.findtext("title", "") or ""
+                desc  = item.findtext("description", "") or ""
+                text  = BeautifulSoup(desc, "html.parser").get_text()
+                combined = title + " " + text
 
-        # Wellfound public search URL
-        url  = (f"https://wellfound.com/jobs"
-                f"?q={requests.utils.quote(role)}"
-                f"&stage[]=seed&stage[]=pre-seed")
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        seen_names = set()
-        # Look for company name patterns in the page
-        for el in soup.find_all(["h2","h3","strong","a"], 
-                                 class_=re.compile(r"company|startup|name|title", re.I)):
-            name = el.get_text(strip=True)
-            if (name and 3 < len(name) < 50 and name not in seen_names
-                    and not is_fund(name) and not is_late_stage(name)):
-                seen_names.add(name)
-                companies.append({
-                    "name": name,
-                    "description": f"Wellfound seed-stage hiring: {role}",
-                    "source": "Wellfound",
-                })
+                if not is_relevant(combined) or is_late_stage(combined):
+                    continue
+                name = title.strip().split(" - ")[0].strip()
+                if name and 2 < len(name) < 50 and not is_fund(name):
+                    companies.append({
+                        "name": name,
+                        "description": text[:200] if text else title,
+                        "source": feed_name,
+                    })
+            time.sleep(1)
 
         print(f"Wellfound: {len(companies)} candidates")
     except Exception as e:
@@ -544,26 +605,34 @@ def source_wellfound():
 def source_betalist():
     """
     BetaList surfaces pre-launch and very early stage startups.
-    These are often pre-seed companies before any funding announcement.
-    Public RSS feed — reliable and not blocked.
+    Sanitizes XML content before parsing to avoid entity errors.
     """
     companies = []
     try:
         resp = requests.get("https://betalist.com/feed", headers=HEADERS, timeout=15)
-        root = ET.fromstring(resp.content)
+        if resp.status_code != 200:
+            print(f"BetaList: {len(companies)} candidates")
+            return companies
+        # Sanitize XML
+        content = resp.content.replace(b"&", b"&amp;").replace(b"&amp;amp;", b"&amp;")
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError as e:
+            print(f"BetaList parse error: {e}")
+            return companies
+
         for item in root.findall(".//item"):
-            title = item.findtext("title", "")
+            title = item.findtext("title", "") or ""
             desc  = item.findtext("description", "") or ""
             text  = BeautifulSoup(desc, "html.parser").get_text()
-            combined = f"{title} {text}"
+            combined = title + " " + text
 
             if is_relevant(combined) and not is_late_stage(combined):
-                # BetaList titles are usually just the company name
                 name = title.strip()
                 if name and len(name) > 2 and not is_fund(name):
                     companies.append({
                         "name": name,
-                        "description": text[:200] if text else f"BetaList: {title}",
+                        "description": text[:200] if text else title,
                         "source": "BetaList",
                     })
 
@@ -576,28 +645,32 @@ def source_betalist():
 # ── SOURCE 10: EUREKALIST / STARTUPBASE ───────────────────────────────────────
 def source_startupbase():
     """
-    StartupBase and similar directories list newly launched startups.
-    Good for pre-seed companies that haven't raised yet.
+    Startup directories for newly launched companies.
+    Sanitizes XML to prevent parse errors.
     """
     companies = []
     sources = [
         ("https://startupbase.io/rss", "StartupBase"),
-        ("https://www.f6s.com/rss/feed", "F6S"),
+        ("https://www.indiehackers.com/feed.xml", "IndieHackers"),
     ]
     for feed_url, feed_name in sources:
         try:
             resp = requests.get(feed_url, headers=HEADERS, timeout=15)
             if resp.status_code != 200:
                 continue
-            root = ET.fromstring(resp.content)
+            content = resp.content.replace(b"&", b"&amp;").replace(b"&amp;amp;", b"&amp;")
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                continue
             for item in root.findall(".//item"):
-                title = item.findtext("title", "")
+                title = item.findtext("title", "") or ""
                 desc  = item.findtext("description", "") or ""
                 text  = BeautifulSoup(desc, "html.parser").get_text()
-                combined = f"{title} {text}"
+                combined = title + " " + text
 
                 if is_relevant(combined) and not is_late_stage(combined):
-                    name = title.strip()
+                    name = title.strip().split(" - ")[0].strip()
                     if name and len(name) > 2 and not is_fund(name):
                         companies.append({
                             "name": name,
@@ -611,10 +684,174 @@ def source_startupbase():
     print(f"StartupBase/F6S: {len(companies)} candidates")
     return companies[:5]
 
-# ── AGGREGATE + DEDUPLICATE ───────────────────────────────────────────────────
+
+# ── SOURCE 11: CRUNCHBASE SEED ROUNDS ────────────────────────────────────────
+def source_crunchbase():
+    """
+    Pulls recent seed/pre-seed funding rounds from Crunchbase API.
+    Requires CRUNCHBASE_API_KEY — free tier at data.crunchbase.com.
+    Sign up at: https://data.crunchbase.com/docs/using-the-api
+    Add as GitHub secret: CRUNCHBASE_API_KEY
+    """
+    companies = []
+    if not CRUNCHBASE_API_KEY:
+        print("Crunchbase: skipped (no API key)")
+        return companies
+
+    try:
+        today     = datetime.date.today()
+        date_from = (today - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
+
+        # Search for recent seed/pre-seed rounds
+        url = "https://api.crunchbase.com/api/v4/searches/funding_rounds"
+        payload = {
+            "field_ids": [
+                "funded_organization_identifier",
+                "funded_organization_description",
+                "funded_organization_categories",
+                "investment_type",
+                "announced_on",
+                "money_raised"
+            ],
+            "predicate_values": [],
+            "predicates": [
+                {
+                    "field_id": "investment_type",
+                    "operator_id": "includes",
+                    "values": ["pre_seed", "seed", "angel"]
+                },
+                {
+                    "field_id": "announced_on",
+                    "operator_id": "gte",
+                    "values": [date_from]
+                }
+            ],
+            "order": [{"field_id": "announced_on", "sort": "desc"}],
+            "limit": 25
+        }
+        resp = requests.post(
+            url,
+            json=payload,
+            params={"user_key": CRUNCHBASE_API_KEY},
+            headers={"Content-Type": "application/json"},
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            print(f"Crunchbase error: {resp.status_code} — {resp.text[:100]}")
+            return companies
+
+        for entity in resp.json().get("entities", []):
+            props = entity.get("properties", {})
+            org   = props.get("funded_organization_identifier", {})
+            name  = org.get("value", "") if isinstance(org, dict) else str(org)
+            desc  = props.get("funded_organization_description", "") or ""
+            cats  = props.get("funded_organization_categories", [])
+            cat_str = " ".join(c.get("value", "") if isinstance(c, dict) else str(c) for c in cats)
+            combined = name + " " + desc + " " + cat_str
+
+            if not name or not is_relevant(combined) or is_fund(name):
+                continue
+            if is_late_stage(combined):
+                continue
+
+            money = props.get("money_raised", {})
+            raise_str = ""
+            if isinstance(money, dict) and money.get("value"):
+                raise_str = f"${money['value']:,.0f} {money.get('currency','USD')}"
+
+            companies.append({
+                "name": name,
+                "description": desc or f"Crunchbase seed round — {cat_str[:100]}",
+                "source": "Crunchbase",
+                "raise": raise_str,
+            })
+
+        print(f"Crunchbase: {len(companies)} candidates")
+    except Exception as e:
+        print(f"Crunchbase error: {e}")
+    return companies[:8]
+
+
+# ── SOURCE 12: CONSUMER SECOND LAYER ─────────────────────────────────────────
+def source_consumer():
+    """
+    Dedicated consumer-focused sourcing via Claude Research.
+    Rotates through consumer Second Layer verticals daily.
+    Consumer Second Layer = apps solving downstream problems from dominant trends
+    for everyday people (not enterprises).
+    """
+    companies = []
+    try:
+        day = datetime.date.today().weekday()
+        consumer_verticals = [
+            ("fintech expansion → personal finance complexity",
+             "personal finance management, debt payoff, subscription tracking, or fee transparency apps"),
+            ("healthcare digitization → fragmented patient experience",
+             "consumer health navigation, benefits decoding, prior auth assistance, or care coordination apps"),
+            ("data broker proliferation → consumer privacy erosion",
+             "personal data deletion, data broker opt-out, identity monitoring, or digital footprint control apps"),
+            ("generative AI adoption → trust and authenticity crisis",
+             "deepfake detection, AI content labeling, voice clone protection, or online scam detection tools"),
+            ("creator economy boom → creator business complexity",
+             "creator tax compliance, brand deal management, audience monetization, or creator legal tools"),
+            ("remote work normalization → career and income instability",
+             "salary negotiation tools, remote job vetting, career coaching, or freelancer income management apps"),
+            ("housing market dysfunction → tenant and buyer confusion",
+             "tenant rights tools, lease analysis, rent negotiation, or first-time buyer navigation apps"),
+        ]
+        vertical_desc, examples = consumer_verticals[day % len(consumer_verticals)]
+
+        prompt = f"""You are a VC researcher specializing in seed-stage consumer startups.
+
+Second Layer thesis: Find consumer apps that exist BECAUSE of a dominant industry trend — 
+not apps that are IN that industry.
+
+Today's angle: {vertical_desc}
+Examples of what to look for: {examples}
+
+List exactly 8 real seed-stage consumer startups solving this downstream problem.
+
+Requirements:
+- Real companies you know about, founded 2019-2025
+- ONLY Seed or Series A — no Series B or later
+- Consumer-facing (B2C), not enterprise
+- Clearly solving a problem CREATED BY the dominant trend above
+- Lesser-known companies preferred over household names
+
+Respond ONLY with a JSON array:
+[
+  {{"name": "CompanyName", "description": "What they do and the Second Layer logic in one sentence"}},
+  ...
+]"""
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw  = re.sub(r"^```json\s*|^```\s*|\s*```$", "",
+                      resp.content[0].text.strip())
+        hits = json.loads(raw)
+        for hit in hits:
+            name = hit.get("name", "")
+            desc = hit.get("description", "")
+            if name and not is_fund(name):
+                companies.append({
+                    "name": name,
+                    "description": desc,
+                    "source": "Consumer Research",
+                })
+        print(f"Consumer: {len(companies)} candidates")
+    except Exception as e:
+        print(f"Consumer Research error: {e}")
+    return companies[:8]
+
+
+
 def get_candidate_companies(previously_seen):
     all_companies = []
-    print("\n--- Sourcing from 10 channels ---")
+    print("\n--- Sourcing from 12 channels ---")
 
     all_companies.extend(source_yc());               time.sleep(2)
     all_companies.extend(source_hacker_news());      time.sleep(2)
@@ -625,7 +862,9 @@ def get_candidate_companies(previously_seen):
     all_companies.extend(source_newsletters());      time.sleep(2)
     all_companies.extend(source_wellfound());        time.sleep(2)
     all_companies.extend(source_betalist());         time.sleep(2)
-    all_companies.extend(source_startupbase())
+    all_companies.extend(source_startupbase());    time.sleep(2)
+    all_companies.extend(source_crunchbase());      time.sleep(2)
+    all_companies.extend(source_consumer())
 
     # Dedup within today's run
     seen_today, unique_today = set(), []
@@ -690,20 +929,17 @@ Source: {source}
 Important: If you have limited information, score conservatively (4-6 range).
 Do not hallucinate specific metrics — note "limited info" in weaknesses if applicable.
 
-Use web search to research this company before scoring. Look up their website,
-LinkedIn, Crunchbase, recent news, and any traction signals you can find.
+This may be a B2B OR consumer company. Apply the framework accordingly:
+- For B2B: weight enterprise traction, contracts, ARR, logo customers
+- For consumer: weight DAU/MAU, retention, app store ratings, organic growth, NPS
 
-Even if overall information is limited, actively look for ANY standout traction signals:
-- Customer logos or named enterprise clients
-- Specific revenue figures or growth rates mentioned anywhere
-- App store ratings or review counts
-- GitHub stars or developer adoption
-- Press mentions or award wins
-- Notable investors or accelerator participation
-- Job posting volume (signals growth)
+Look for ANY standout traction signals:
+- B2B: customer logos, ARR/MRR figures, enterprise contracts, pilot programs
+- Consumer: app store ratings/reviews, DAU/MAU, waitlist size, press coverage
+- Both: GitHub stars, notable investors, accelerator participation, job posting volume
 
 Respond ONLY with a single valid JSON object. No markdown, no explanation, just JSON:
-{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/Series A/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"2B":5,"3A":5,"3B":5,"4":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence","stage_gate":"PASS or FAIL — FAIL if Series B or later","traction_highlights":["specific signal 1 if found","specific signal 2 if found"]}}"""
+{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/Series A/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk/problem → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"2B":5,"3A":5,"3B":5,"4":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence","stage_gate":"PASS or FAIL — FAIL if Series B or later","traction_highlights":["specific signal 1 if found","specific signal 2 if found"]}}"""
 
 WEIGHTS = {"1A":0.10,"1B":0.08,"1C":0.07,"2A":0.12,"2B":0.08,
            "3A":0.12,"3B":0.08,"4":0.07,"5":0.08,"6":0.10,"7":0.10}
@@ -758,7 +994,7 @@ def score_company(co):
                 print(f"  Retrying after rate limit pause...")
                 time.sleep(30)
             resp = client.messages.create(
-                model="claude-sonnet-4-5",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -980,48 +1216,49 @@ def company_card(co):
 </div>"""
 
 def build_email(results, date_str, total_seen):
-    passing   = sorted([r for r in results if r.get("score_pct",0) >= MIN_SCORE_PCT],
-                       key=lambda x: x.get("score_pct",0), reverse=True)
-    below     = sorted([r for r in results if r.get("score_pct",0) < MIN_SCORE_PCT],
-                       key=lambda x: x.get("score_pct",0), reverse=True)
-    n_total   = len(results)
-    n_passing = len(passing)
-    pass_rate = (n_passing / n_total * 100) if n_total > 0 else 0
+    passing  = sorted([r for r in results if r.get("score_pct",0) >= MIN_SCORE_PCT],
+                      key=lambda x: x.get("score_pct",0), reverse=True)
+    below    = sorted([r for r in results if r.get("score_pct",0) < MIN_SCORE_PCT],
+                      key=lambda x: x.get("score_pct",0), reverse=True)
+    n_total  = len(results)
+    n_pass   = len(passing)
+    pass_rate = (n_pass / n_total * 100) if n_total > 0 else 0
 
     sc = {}
     for r in results:
-        s = r.get("source","?")
-        sc[s] = sc.get(s,0) + 1
-    src_summary = " · ".join(f"{s}:{c}" for s, c in sorted(sc.items()))
+        s = r.get("source", "?")
+        sc[s] = sc.get(s, 0) + 1
+    src_summary = " | ".join(s + ":" + str(c) for s, c in sorted(sc.items()))
 
-    subject = (f"🔍 Second Layer — {date_str} | "
-               f"{n_passing} passing of {n_total} | {total_seen} total pipeline")
+    subject = ("Second Layer - " + date_str + " | "
+               + str(n_pass) + " passing of " + str(n_total)
+               + " | " + str(total_seen) + " total pipeline")
 
-    cards = ("".join(company_card(c) for c in passing) if passing else
-             "<p style='color:#888;text-align:center;padding:30px;'>"
-             "No companies met the threshold today — see filtered list below.</p>")
+    # ── Passing cards ──────────────────────────────────────────────────────────
+    if passing:
+        cards = "".join(company_card(c) for c in passing)
+    else:
+        cards = "<p style='color:#888;text-align:center;padding:30px;'>No companies met threshold today.</p>"
 
-    below_row_parts = []
-    for i, r in enumerate(below):
-        bg = "#fff" if i % 2 == 0 else "#f9f9f9"
-        below_row_parts.append(
-            "<tr style='background:" + bg + ";'>"
-            "<td style='padding:6px 10px;font-size:12px;'>" + r.get('company_name','') + "</td>"
-            "<td style='padding:6px 10px;font-size:11px;'>" + src_badge(r.get('source','')) + "</td>"
-            "<td style='padding:6px 10px;font-size:12px;color:#666;'>" + r.get('vertical','') + "</td>"
-            "<td style='padding:6px 10px;font-size:12px;font-weight:bold;text-align:center;'>" + f"{r.get('score_pct',0):.1f}%" + "</td>"
-            "<td style='padding:6px 10px;font-size:12px;'>" + r.get('decision','') + "</td>"
-            "<td style='padding:6px 10px;font-size:12px;color:#888;'>" + r.get('key_weakness','') + "</td>"
-            "</tr>"
-        )
-    below_rows = "".join(below_row_parts)
-
+    # ── Below threshold table ──────────────────────────────────────────────────
     if below:
+        brows = []
+        for i, r in enumerate(below):
+            bg = "#ffffff" if i % 2 == 0 else "#f9f9f9"
+            brows.append(
+                "<tr style='background:" + bg + ";'>"
+                + "<td style='padding:6px 10px;font-size:12px;'>" + str(r.get("company_name","")) + "</td>"
+                + "<td style='padding:6px 10px;font-size:11px;'>" + src_badge(str(r.get("source",""))) + "</td>"
+                + "<td style='padding:6px 10px;font-size:12px;color:#666;'>" + str(r.get("vertical","")) + "</td>"
+                + "<td style='padding:6px 10px;font-size:12px;font-weight:bold;text-align:center;'>" + str(round(r.get("score_pct",0),1)) + "%</td>"
+                + "<td style='padding:6px 10px;font-size:12px;'>" + str(r.get("decision","")) + "</td>"
+                + "<td style='padding:6px 10px;font-size:12px;color:#888;'>" + str(r.get("key_weakness","")) + "</td>"
+                + "</tr>"
+            )
         below_section = (
             "<div style='margin-bottom:20px;'>"
-            "<h2 style='color:#666;font-size:13px;margin-bottom:8px;"
-            "border-bottom:1px solid #ddd;padding-bottom:5px;'>"
-            "&#128202; Evaluated But Filtered (below " + f"{MIN_SCORE_PCT:.0f}" + "%)</h2>"
+            "<h2 style='color:#666;font-size:13px;border-bottom:1px solid #ddd;padding-bottom:5px;margin-bottom:8px;'>"
+            "Evaluated But Filtered (below " + str(int(MIN_SCORE_PCT)) + "%)</h2>"
             "<table style='width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;'>"
             "<tr style='background:#1b3a6b;'>"
             "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Company</th>"
@@ -1031,54 +1268,43 @@ def build_email(results, date_str, total_seen):
             "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Decision</th>"
             "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Weakness</th>"
             "</tr>"
-            + below_rows +
-            "</table></div>"
+            + "".join(brows)
+            + "</table></div>"
         )
     else:
         below_section = ""
 
-
-    # Build outreach table BEFORE html string
-    outreach_table = ""
+    # ── Founder outreach table ─────────────────────────────────────────────────
     outreach_candidates = [
         r for r in passing
         if r.get("founder", {}).get("founder_name", "unknown") not in ["", "unknown"]
     ]
     if outreach_candidates:
-        row_parts = []
+        orows = []
         for i, r in enumerate(outreach_candidates):
-            bg        = "#fff" if i % 2 == 0 else "#f9f9f9"
-            name      = r.get("company_name", "")
-            founder   = r.get("founder", {})
-            fn        = founder.get("founder_name", "")
-            ft        = founder.get("founder_title", "")
-            vertical  = r.get("vertical", "")
-            score     = f"{r.get('score_pct', 0):.1f}%"
-            li_url    = founder.get("linkedin_url", "")
+            bg      = "#ffffff" if i % 2 == 0 else "#f9f9f9"
+            founder = r.get("founder", {})
+            li_url  = founder.get("linkedin_url", "")
             if li_url and li_url != "unknown":
-                li_btn = f'<a href="{li_url}" target="_blank" style="color:#0a66c2;font-weight:bold;text-decoration:none;">LinkedIn &#8594;</a>'
+                li_btn = "<a href='" + li_url + "' target='_blank' style='color:#0a66c2;font-weight:bold;text-decoration:none;'>LinkedIn</a>"
             else:
-                li_btn = '<span style="color:#aaa;">&#8212;</span>'
-            row_parts.append(
-                f"<tr style='background:{bg};'>"
-                f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{name}</td>"
-                f"<td style='padding:8px 12px;font-size:12px;'>{fn}</td>"
-                f"<td style='padding:8px 12px;font-size:12px;color:#666;'>{ft}</td>"
-                f"<td style='padding:8px 12px;font-size:12px;'>{vertical}</td>"
-                f"<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>{score}</td>"
-                f"<td style='padding:8px 12px;font-size:12px;'>{li_btn}</td>"
-                f"</tr>"
+                li_btn = "<span style='color:#aaa;'>-</span>"
+            orows.append(
+                "<tr style='background:" + bg + ";'>"
+                + "<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>" + str(r.get("company_name","")) + "</td>"
+                + "<td style='padding:8px 12px;font-size:12px;'>" + str(founder.get("founder_name","")) + "</td>"
+                + "<td style='padding:8px 12px;font-size:12px;color:#666;'>" + str(founder.get("founder_title","")) + "</td>"
+                + "<td style='padding:8px 12px;font-size:12px;'>" + str(r.get("vertical","")) + "</td>"
+                + "<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>" + str(round(r.get("score_pct",0),1)) + "%</td>"
+                + "<td style='padding:8px 12px;font-size:12px;'>" + li_btn + "</td>"
+                + "</tr>"
             )
-        rows = "".join(row_parts)
-        outreach_table = (
+        outreach_section = (
             "<div style='margin-bottom:20px;'>"
-            "<h2 style='color:#1b3a6b;font-size:15px;margin-bottom:8px;"
-            "border-bottom:2px solid #c55a11;padding-bottom:5px;'>"
-            "&#128100; Founder Outreach List</h2>"
-            "<p style='font-size:11px;color:#888;margin-bottom:10px;'>"
-            "High-scoring companies with identified founders.</p>"
-            "<table style='width:100%;border-collapse:collapse;background:white;"
-            "border-radius:6px;overflow:hidden;'>"
+            "<h2 style='color:#1b3a6b;font-size:15px;border-bottom:2px solid #c55a11;padding-bottom:5px;margin-bottom:8px;'>"
+            "Founder Outreach List</h2>"
+            "<p style='font-size:11px;color:#888;margin-bottom:10px;'>High-scoring companies with identified founders.</p>"
+            "<table style='width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;'>"
             "<tr style='background:#1b3a6b;'>"
             "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Company</th>"
             "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Founder</th>"
@@ -1087,44 +1313,53 @@ def build_email(results, date_str, total_seen):
             "<th style='padding:8px 12px;color:white;font-size:11px;'>Score</th>"
             "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>LinkedIn</th>"
             "</tr>"
-            + rows +
-            "</table></div>"
+            + "".join(orows)
+            + "</table></div>"
         )
+    else:
+        outreach_section = ""
 
-    # Build html using string concatenation — avoids f-string variable scoping issues
+    # ── Assemble full HTML ─────────────────────────────────────────────────────
     html = (
-        '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
-        '<body style="font-family:Arial,sans-serif;max-width:840px;margin:0 auto;background:#f4f6f9;padding:20px;">'
-        '<div style="background:#1b3a6b;border-radius:10px 10px 0 0;padding:22px 26px;">'
-        '<div style="color:white;font-size:20px;font-weight:bold;">&#128269; Second Layer VC Pipeline</div>'
-        '<div style="color:#aac4e8;font-size:12px;margin-top:3px;">' + date_str + ' &middot; Daily Digest</div>'
-        '<div style="color:#d6e4f7;font-size:11px;margin-top:6px;">Sources today: ' + src_summary + '</div>'
-        '</div>'
-        '<div style="background:#2e75b6;padding:12px 26px;display:flex;gap:24px;margin-bottom:18px;">'
-        '<div style="text-align:center;"><div style="color:white;font-size:22px;font-weight:bold;">' + str(n_total) + '</div><div style="color:#aac4e8;font-size:10px;">TODAY</div></div>'
-        '<div style="text-align:center;"><div style="color:#c6efce;font-size:22px;font-weight:bold;">' + str(n_passing) + '</div><div style="color:#aac4e8;font-size:10px;">PASSING</div></div>'
-        '<div style="text-align:center;"><div style="color:#ffc7ce;font-size:22px;font-weight:bold;">' + str(n_total - n_passing) + '</div><div style="color:#aac4e8;font-size:10px;">FILTERED</div></div>'
-        '<div style="text-align:center;"><div style="color:#ffeb9c;font-size:22px;font-weight:bold;">' + f"{pass_rate:.0f}%" + '</div><div style="color:#aac4e8;font-size:10px;">PASS RATE</div></div>'
-        '<div style="text-align:center;border-left:1px solid #5a9fd4;padding-left:24px;"><div style="color:white;font-size:22px;font-weight:bold;">' + str(total_seen) + '</div><div style="color:#aac4e8;font-size:10px;">TOTAL PIPELINE</div></div>'
-        '</div>'
-        '<div style="margin-bottom:22px;">'
-        '<h2 style="color:#1b3a6b;font-size:15px;margin-bottom:12px;border-bottom:2px solid #2e75b6;padding-bottom:5px;">'
-        '&#9989; Meeting Threshold (&ge;' + f"{MIN_SCORE_PCT:.0f}" + '%)</h2>'
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'></head>"
+        "<body style='font-family:Arial,sans-serif;max-width:840px;margin:0 auto;background:#f4f6f9;padding:20px;'>"
+
+        # Header
+        "<div style='background:#1b3a6b;border-radius:10px 10px 0 0;padding:22px 26px;'>"
+        "<div style='color:white;font-size:20px;font-weight:bold;'>Second Layer VC Pipeline</div>"
+        "<div style='color:#aac4e8;font-size:12px;margin-top:3px;'>" + date_str + " - Daily Digest</div>"
+        "<div style='color:#d6e4f7;font-size:11px;margin-top:6px;'>Sources: " + src_summary + "</div>"
+        "</div>"
+
+        # Stats bar
+        "<div style='background:#2e75b6;padding:12px 26px;display:flex;gap:24px;margin-bottom:18px;'>"
+        "<div style='text-align:center;'><div style='color:white;font-size:22px;font-weight:bold;'>" + str(n_total) + "</div><div style='color:#aac4e8;font-size:10px;'>TODAY</div></div>"
+        "<div style='text-align:center;'><div style='color:#c6efce;font-size:22px;font-weight:bold;'>" + str(n_pass) + "</div><div style='color:#aac4e8;font-size:10px;'>PASSING</div></div>"
+        "<div style='text-align:center;'><div style='color:#ffc7ce;font-size:22px;font-weight:bold;'>" + str(n_total - n_pass) + "</div><div style='color:#aac4e8;font-size:10px;'>FILTERED</div></div>"
+        "<div style='text-align:center;'><div style='color:#ffeb9c;font-size:22px;font-weight:bold;'>" + str(round(pass_rate)) + "%</div><div style='color:#aac4e8;font-size:10px;'>PASS RATE</div></div>"
+        "<div style='text-align:center;border-left:1px solid #5a9fd4;padding-left:24px;'><div style='color:white;font-size:22px;font-weight:bold;'>" + str(total_seen) + "</div><div style='color:#aac4e8;font-size:10px;'>TOTAL PIPELINE</div></div>"
+        "</div>"
+
+        # Cards
+        "<div style='margin-bottom:22px;'>"
+        "<h2 style='color:#1b3a6b;font-size:15px;margin-bottom:12px;border-bottom:2px solid #2e75b6;padding-bottom:5px;'>"
+        "Meeting Threshold (>=" + str(int(MIN_SCORE_PCT)) + "%)</h2>"
         + cards +
-        '</div>'
+        "</div>"
+
         + below_section
-        + outreach_table +
-        '<div style="text-align:center;color:#aaa;font-size:10px;margin-top:16px;padding-top:14px;border-top:1px solid #ddd;">'
-        'Bryan Hanley &middot; Second Layer VC Framework &middot; Never repeats a company<br>'
-        'Sources: YC (9 batches) &middot; HN &middot; SEC Form D &middot; RSS &middot; Claude Research &middot; GitHub &middot; Newsletters &middot; BetaList'
-        '</div>'
-        '</body></html>'
+        + outreach_section
+
+        # Footer
+        + "<div style='text-align:center;color:#aaa;font-size:10px;margin-top:16px;padding-top:14px;border-top:1px solid #ddd;'>"
+        "Bryan Hanley - Second Layer VC Framework - Never repeats a company"
+        "</div>"
+        "</body></html>"
     )
 
     return subject, html
 
 
-# ── SEND EMAIL ────────────────────────────────────────────────────────────────
 def send_email(subject, html_body):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -1175,7 +1410,7 @@ def main():
             print(f"  → {result.get('score_pct',0):.1f}% | {result.get('decision','')}")
         else:
             stage_gated += 1  # score_company returns None for stage gate fails too
-        time.sleep(3)  # Longer delay to avoid rate limits with Sonnet web search
+        time.sleep(10)  # 10s delay keeps Haiku under 50k token/min rate limit
     print(f"Stage gated (removed): {stage_gated}")
 
     append_results_to_sheet(results, date_str)
