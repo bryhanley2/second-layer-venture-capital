@@ -1099,44 +1099,40 @@ If you are not confident about the LinkedIn URL, return "unknown" rather than gu
             "outreach_hook": "unknown"}
 
 # ── OUTREACH DRAFT ────────────────────────────────────────────────────────────
-def draft_outreach(company: dict) -> str:
+def founder_brief(company: dict) -> str:
     """
-    Writes a short, personalized cold outreach message to the founder.
-    Anchored on Second Layer thesis fit and the founder's specific background.
+    Generates a concise founder brief — key facts Bryan needs to write
+    his own personalized outreach. No draft message, just the intel.
     """
-    founder    = company.get("founder", {})
-    fn         = founder.get("founder_name", "")
-    bg         = founder.get("founder_background", "")
-    hook       = founder.get("outreach_hook", "")
-    co_name    = company.get("company_name", "")
-    sl_logic   = company.get("second_layer_logic", "")
-    what       = company.get("what_they_do", "")
+    founder  = company.get("founder", {})
+    fn       = founder.get("founder_name", "")
+    bg       = founder.get("founder_background", "")
+    co_name  = company.get("company_name", "")
+    sl_logic = company.get("second_layer_logic", "")
+    what     = company.get("what_they_do", "")
+    vertical = company.get("vertical", "")
 
     if not fn or fn == "unknown":
         return ""
 
-    prompt = f"""Write a short cold outreach email from Bryan Hanley, a VC scout focused on
-seed-stage companies that solve downstream problems created by dominant industry trends
-(the "Second Layer" approach). Bryan runs a sourcing pipeline at bryanhanleyvc.com and
-wants to meet interesting founders — not pitch them, just have a conversation and potentially
-connect them with investors in his network.
+    prompt = f"""You are helping a 23-year-old VC scout named Bryan Hanley prepare to reach out
+to a founder. Bryan wants to write his own outreach in his own voice — he does NOT want a
+draft email. Instead, give him a tight intel brief with exactly four bullet points:
 
-Founder: {fn}
-Founder background: {bg}
-Outreach hook: {hook}
 Company: {co_name}
+Founder: {fn}
+Background: {bg}
 What they do: {what}
 Second Layer logic: {sl_logic}
+Vertical: {vertical}
 
-Write a 4-5 sentence cold email. Rules:
-- Open with something specific about their background or what they're building — not generic flattery
-- One sentence on why this fits the Second Layer thesis (dominant trend → downstream problem → their solution)
-- One sentence on what Bryan offers: introductions to seed-stage VCs, market context, no pressure
-- Close with a simple ask: 20-minute call
-- Tone: direct, peer-to-peer, not salesy. Bryan is 23 and speaks like a founder, not a banker.
-- No subject line needed. Just the body.
+Write exactly 4 bullet points:
+1. The single most interesting thing about this founder's background that Bryan should reference
+2. Why this company is a textbook Second Layer play — the dominant trend, the downstream problem it creates, and how this company solves it (one crisp sentence)
+3. One specific way Bryan can be genuinely useful to them — be concrete (e.g. "connects with fintech compliance VCs", "has DSCSA supply chain context from Gateway Checker", "can intro to regtech angels")
+4. One open question about the company or founder that Bryan could ask to start a real conversation
 
-Return only the email body, no extra commentary."""
+Format as plain bullet points starting with a dash. No headers, no preamble, no sign-off. Just the 4 bullets."""
 
     try:
         resp = client.messages.create(
@@ -1146,7 +1142,7 @@ Return only the email body, no extra commentary."""
         )
         return resp.content[0].text.strip()
     except Exception as e:
-        print(f"  Outreach draft error: {e}")
+        print(f"  Founder brief error: {e}")
         return ""
 
 
@@ -1379,8 +1375,8 @@ def build_email(results, date_str, total_seen):
             # Draft outreach
             "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;'>"
             "<div style='font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;"
-            "letter-spacing:0.05em;margin-bottom:8px;'>Draft Outreach</div>"
-            "<div style='font-size:12px;color:#334155;line-height:1.7;'>" + draft + "</div>"
+            "letter-spacing:0.05em;margin-bottom:8px;'>Outreach Intel</div>"
+            "<div style='font-size:12px;color:#334155;line-height:1.9;white-space:pre-line;'>" + draft + "</div>"
             "</div>"
 
             "</div></div>"
@@ -1526,8 +1522,8 @@ def main():
         if outreach_count >= 3:
             break
         if r.get("founder", {}).get("founder_name", "unknown") != "unknown":
-            print(f"  Drafting outreach for {r.get('company_name','')}")
-            r["outreach_draft"] = draft_outreach(r)
+            print(f"  Building founder brief for {r.get('company_name','')}")
+            r["outreach_draft"] = founder_brief(r)
             outreach_count += 1
             time.sleep(2)
 
