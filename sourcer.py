@@ -78,6 +78,10 @@ LATE_STAGE_SIGNALS = [
     "$50m", "$75m", "$100m", "$150m", "$200m",
     "50 million", "75 million", "100 million",
     "growth stage", "late stage", "pre-ipo",
+    # Also filter Series A from sourcing channels — we only want pre-seed/seed
+    "series a",
+    "$15m raise", "$20m raise", "$25m raise", "$30m raise",
+    "$15 million raise", "$20 million raise", "$25 million raise",
 ]
 
 def is_late_stage(text):
@@ -402,7 +406,7 @@ List exactly 10 real startups in this vertical that solve a downstream problem c
 STRICT Requirements:
 - Must be real companies you know about
 - Founded 2019-2025
-- ONLY Seed or Series A stage — absolutely no Series B, C, D or later
+- ONLY Pre-Seed or Seed stage — absolutely no Series A, B, C, D or later
 {extra}- Prioritize lesser-known companies over well-known ones
 
 Respond ONLY with a JSON array, no other text:
@@ -814,7 +818,7 @@ List exactly 8 real seed-stage consumer startups solving this downstream problem
 
 Requirements:
 - Real companies you know about, founded 2019-2025
-- ONLY Seed or Series A — no Series B or later
+- ONLY Pre-Seed or Seed — no Series A or later
 - Consumer-facing (B2C), not enterprise
 - Clearly solving a problem CREATED BY the dominant trend above
 - Lesser-known companies preferred over household names
@@ -901,21 +905,27 @@ FAILS if it IS the dominant industry (an LLM itself, a crypto exchange).
 """
 
 SCORING_RUBRIC = """
-Score 0-10 per factor. Default 5 if unknown. Reserve 8-10 for exceptional only.
-1A FMF(10%): 9=exit+domain,7=strong bg,5=adjacent,3=limited
-1B Tech(8%): 9=working product,7=prototype,5=MVP,3=struggling
-1C Commit(7%): 9=quit job,7=fulltime,5=recent,3=side project
-2A PMF(12%): 9=obsessed users,7=good engage,5=some users,3=low
-2B Rev(8%): 9=strong rev,7=some rev,5=pilots,3=minimal,0=none
-3A TAM(12%): 9=$50B+,7=$10-50B,5=$1-10B,3=$100M-1B,0=<$100M
-3B Timing(8%): 9=greenfield,7=beatable comp,5=crowded,3=poor
-4 TrxQ(7%): 9=>20%wk,7=10-20%,5=5-10%,3=<5%,0=none
-5 TrxQl(8%): 9=devastated if gone,7=strong NPS,5=useful,3=mixed
-6 CapEff(10%): 9=big on<$100K,7=efficient,5=avg,3=intensive
-7 Investor(10%): 9=Seq/a16z/YC,7=tier1-2,5=angels,3=unknown
+EARLY-STAGE SCORING (Pre-Seed / Seed only). Score 0-10 per factor.
+If a factor cannot be assessed due to limited info, score 5 (neutral) — do NOT penalise
+unknown metrics; early-stage companies haven't had time to generate them yet.
+Reserve 8-10 for genuinely exceptional signals only.
+
+1A FMF(14%):  9=prior exit+domain expertise, 7=strong domain bg, 5=adjacent, 3=limited
+1B Tech(11%): 9=working product with differentiation, 7=prototype, 5=MVP, 3=concept only
+1C Commit(10%):9=quit job+fully committed, 7=fulltime recent, 5=part-time, 3=side project
+2A PMF(15%):  9=obsessed early users/waitlist/pilots, 7=positive signals, 5=some interest, 3=unclear
+3A TAM(12%):  9=$50B+, 7=$10-50B, 5=$1-10B, 3=$100M-1B, 0=<$100M
+3B Timing(11%):9=regulatory/structural catalyst NOW, 7=beatable comp, 5=crowded, 3=poor timing
+5 TrxQl(10%): 9=accelerator/named pilots/press, 7=early traction signals, 5=some, 3=none visible
+6 CapEff(10%): 9=capital-light model, 7=efficient, 5=avg, 3=capital-intensive
+7 Investor(7%):9=top-tier VC/YC, 7=notable angels, 5=unknown angels, 3=no outside capital
+
+NOTE: Factors 2B (Revenue) and 4 (Quantitative Traction) are EXCLUDED from early-stage
+scoring — these metrics are rarely observable at pre-seed/seed and should not penalise
+early companies. Weights above sum to 100%.
 """
 
-SCORE_PROMPT = """You are a VC analyst applying the Second Layer investment framework.
+SCORE_PROMPT = """You are a VC analyst applying the Second Layer investment framework to EARLY-STAGE companies only.
 
 {second_layer_context}
 
@@ -926,29 +936,42 @@ Name: {company_name}
 Description: {description}
 Source: {source}
 
-Important: If you have limited information, score conservatively (4-6 range).
-Do not hallucinate specific metrics — note "limited info" in weaknesses if applicable.
+CRITICAL: This is an early-stage (pre-seed/seed) evaluation framework. Do NOT penalise
+companies for lacking revenue, growth metrics, or quantitative traction — these factors
+are excluded. Focus on founder quality, timing, market size, and qualitative signals.
 
-This may be a B2B OR consumer company. Apply the framework accordingly:
-- For B2B: weight enterprise traction, contracts, ARR, logo customers
-- For consumer: weight DAU/MAU, retention, app store ratings, organic growth, NPS
+If you have limited information, score 5 (neutral) — not lower. Reserve low scores (1-3)
+only for clear negative signals, not absence of data.
 
-Look for ANY standout traction signals:
-- B2B: customer logos, ARR/MRR figures, enterprise contracts, pilot programs
-- Consumer: app store ratings/reviews, DAU/MAU, waitlist size, press coverage
-- Both: GitHub stars, notable investors, accelerator participation, job posting volume
+This may be a B2B OR consumer company. For B2B look for: named pilots, enterprise interest,
+domain credibility. For consumer look for: waitlists, organic signups, app launches, press.
 
 Respond ONLY with a single valid JSON object. No markdown, no explanation, just JSON:
-{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/Series A/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk/problem → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"2B":5,"3A":5,"3B":5,"4":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence","stage_gate":"PASS or FAIL — FAIL if Series B or later","traction_highlights":["specific signal 1 if found","specific signal 2 if found"]}}"""
+{{"company_name":"string","founded":"YYYY or unknown","stage":"Pre-Seed/Seed/unknown","raise":"$XM or unknown","vertical":"concise label","what_they_do":"2-3 sentences","second_layer_alignment":true,"second_layer_logic":"First Layer trend → risk/problem → solution","scores":{{"1A":5,"1B":5,"1C":5,"2A":5,"3A":5,"3B":5,"5":5,"6":5,"7":5}},"weighted_score":5.0,"score_pct":50.0,"decision":"★★ PROBABLY PASS","key_strength":"one sentence","key_weakness":"one sentence","stage_gate":"PASS or FAIL — FAIL if Series A or later","traction_highlights":["specific signal 1 if found","specific signal 2 if found"]}}"""
 
-WEIGHTS = {"1A":0.10,"1B":0.08,"1C":0.07,"2A":0.12,"2B":0.08,
-           "3A":0.12,"3B":0.08,"4":0.07,"5":0.08,"6":0.10,"7":0.10}
+# Early-stage weights — 2B Revenue and 4 Quantitative Traction removed
+# Redistributed to founder quality, timing, and PMF factors
+WEIGHTS = {
+    "1A": 0.14,   # Founder-market fit — most predictive at pre-seed
+    "1B": 0.11,   # Technical differentiation — observable before revenue
+    "1C": 0.10,   # Commitment — fulltime vs side project matters early
+    "2A": 0.15,   # PMF signals — pilots, waitlists, early users
+    "3A": 0.12,   # TAM — unchanged
+    "3B": 0.11,   # Timing — regulatory/structural catalysts especially matter early
+    "5":  0.10,   # Qualitative traction — accelerators, press, named pilots
+    "6":  0.10,   # Capital efficiency — lean model vs capital-intensive
+    "7":  0.07,   # Investor quality — reduced weight (angels dominate at this stage)
+}
 
-LATE_STAGE_KEYWORDS_HARD = ["series b", "series c", "series d", "series e",
-                               "growth equity", "pre-ipo", "late stage"]
+LATE_STAGE_KEYWORDS_HARD = [
+    "series b", "series c", "series d", "series e",
+    "growth equity", "pre-ipo", "late stage",
+    # Hard block Series A — pipeline is pre-seed/seed only
+    "series a",
+]
 
 def is_definitely_late_stage(co):
-    """Hard filter — skip scoring entirely if company is clearly Series B+."""
+    """Hard filter — skip scoring entirely if company is Series A or later."""
     text = f"{co.get('name','')} {co.get('description','')}".lower()
     return any(kw in text for kw in LATE_STAGE_KEYWORDS_HARD)
 
@@ -974,8 +997,9 @@ def score_company(co):
         data["weighted_score"] = round(ws, 2)
         data["score_pct"]      = round(pct, 1)
         data["source"]         = co.get("source", "")
-        stage      = data.get("stage", "").lower()
-        late_stages = ["series b", "series c", "series d", "series e",
+        stage = data.get("stage", "").lower()
+        # Stage gate: only pre-seed and seed pass
+        late_stages = ["series a", "series b", "series c", "series d", "series e",
                        "late stage", "pre-ipo", "acquired", "merged"]
         if any(s in stage for s in late_stages):
             print(f"  Stage gate FAIL: {co['name']} ({data.get('stage','unknown')})")
@@ -1035,22 +1059,23 @@ def score_company(co):
 # ── FOUNDER RESEARCH ──────────────────────────────────────────────────────────
 def research_founder(company: dict) -> dict:
     """
-    For companies scoring ≥75%, asks Claude to identify the founder
-    name and LinkedIn URL. Only runs on high-scoring companies to save cost.
+    Researches the founder of every scored company.
+    Returns name, title, LinkedIn, background, and a hook for outreach.
     """
-    prompt = f"""You are a startup researcher.
+    prompt = f"""You are a startup researcher helping a VC scout find interesting founders to meet.
 
-Find the founder(s) of this company:
 Company: {company.get("company_name", "")}
 What they do: {company.get("what_they_do", "")}
 Vertical: {company.get("vertical", "")}
+Second Layer logic: {company.get("second_layer_logic", "")}
 
-Return ONLY valid JSON, no other text:
+Find the founder(s) and return ONLY valid JSON, no other text:
 {{
   "founder_name": "Full Name or unknown",
   "founder_title": "CEO/CTO/Co-Founder or unknown",
   "linkedin_url": "https://linkedin.com/in/handle or unknown",
-  "founder_background": "One sentence on relevant background"
+  "founder_background": "One sentence on their most interesting background detail — prior exits, domain expertise, notable employers",
+  "outreach_hook": "One sentence on why their background is specifically interesting relative to what they are building — be specific, not generic"
 }}
 
 If you are not confident about the LinkedIn URL, return "unknown" rather than guessing."""
@@ -1058,21 +1083,73 @@ If you are not confident about the LinkedIn URL, return "unknown" rather than gu
     try:
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
+            max_tokens=400,
             messages=[{"role": "user", "content": prompt}]
         )
         raw   = re.sub(r"^```json\s*|^```\s*|\s*```$", "", resp.content[0].text.strip())
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             data = json.loads(match.group())
-            print(f"  Founder: {data.get('founder_name','')} — {data.get('linkedin_url','')}")
+            print(f"  Founder: {data.get('founder_name','')} — {data.get('founder_background','')[:60]}")
             return data
     except Exception as e:
         print(f"  Founder research error: {e}")
     return {"founder_name": "unknown", "founder_title": "unknown",
-            "linkedin_url": "unknown", "founder_background": "unknown"}
+            "linkedin_url": "unknown", "founder_background": "unknown",
+            "outreach_hook": "unknown"}
 
-# ── EMAIL ─────────────────────────────────────────────────────────────────────
+# ── OUTREACH DRAFT ────────────────────────────────────────────────────────────
+def draft_outreach(company: dict) -> str:
+    """
+    Writes a short, personalized cold outreach message to the founder.
+    Anchored on Second Layer thesis fit and the founder's specific background.
+    """
+    founder    = company.get("founder", {})
+    fn         = founder.get("founder_name", "")
+    bg         = founder.get("founder_background", "")
+    hook       = founder.get("outreach_hook", "")
+    co_name    = company.get("company_name", "")
+    sl_logic   = company.get("second_layer_logic", "")
+    what       = company.get("what_they_do", "")
+
+    if not fn or fn == "unknown":
+        return ""
+
+    prompt = f"""Write a short cold outreach email from Bryan Hanley, a VC scout focused on
+seed-stage companies that solve downstream problems created by dominant industry trends
+(the "Second Layer" approach). Bryan runs a sourcing pipeline at bryanhanleyvc.com and
+wants to meet interesting founders — not pitch them, just have a conversation and potentially
+connect them with investors in his network.
+
+Founder: {fn}
+Founder background: {bg}
+Outreach hook: {hook}
+Company: {co_name}
+What they do: {what}
+Second Layer logic: {sl_logic}
+
+Write a 4-5 sentence cold email. Rules:
+- Open with something specific about their background or what they're building — not generic flattery
+- One sentence on why this fits the Second Layer thesis (dominant trend → downstream problem → their solution)
+- One sentence on what Bryan offers: introductions to seed-stage VCs, market context, no pressure
+- Close with a simple ask: 20-minute call
+- Tone: direct, peer-to-peer, not salesy. Bryan is 23 and speaks like a founder, not a banker.
+- No subject line needed. Just the body.
+
+Return only the email body, no extra commentary."""
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        print(f"  Outreach draft error: {e}")
+        return ""
+
+
 DECISION_STYLE = {
     "★★★★★ STRONG YES":("#1a472a","#a9d18e"),
     "★★★★ YES":         ("#1a472a","#c6efce"),
@@ -1216,13 +1293,8 @@ def company_card(co):
 </div>"""
 
 def build_email(results, date_str, total_seen):
-    passing  = sorted([r for r in results if r.get("score_pct",0) >= MIN_SCORE_PCT],
-                      key=lambda x: x.get("score_pct",0), reverse=True)
-    below    = sorted([r for r in results if r.get("score_pct",0) < MIN_SCORE_PCT],
-                      key=lambda x: x.get("score_pct",0), reverse=True)
-    n_total  = len(results)
-    n_pass   = len(passing)
-    pass_rate = (n_pass / n_total * 100) if n_total > 0 else 0
+    all_sorted  = sorted(results, key=lambda x: x.get("score_pct", 0), reverse=True)
+    n_total     = len(results)
 
     sc = {}
     for r in results:
@@ -1231,128 +1303,163 @@ def build_email(results, date_str, total_seen):
     src_summary = " | ".join(s + ":" + str(c) for s, c in sorted(sc.items()))
 
     subject = ("Second Layer - " + date_str + " | "
-               + str(n_pass) + " passing of " + str(n_total)
-               + " | " + str(total_seen) + " total pipeline")
+               + str(n_total) + " scored | " + str(total_seen) + " total pipeline")
 
-    # ── Passing cards ──────────────────────────────────────────────────────────
-    if passing:
-        cards = "".join(company_card(c) for c in passing)
+    # ── Top 3 founders to meet ──────────────────────────────────────────────
+    top3 = [r for r in all_sorted if r.get("outreach_draft", "")][:3]
+
+    def founder_card(r, rank):
+        founder    = r.get("founder", {})
+        fn         = founder.get("founder_name", "Unknown Founder")
+        ft         = founder.get("founder_title", "")
+        fbg        = founder.get("founder_background", "")
+        li         = founder.get("linkedin_url", "")
+        co         = r.get("company_name", "")
+        sl         = r.get("second_layer_logic", "")
+        what       = r.get("what_they_do", "")
+        score      = str(round(r.get("score_pct", 0), 1)) + "%"
+        decision   = r.get("decision", "")
+        draft      = r.get("outreach_draft", "").replace("\n", "<br>")
+        vertical   = r.get("vertical", "")
+
+        li_btn = ""
+        if li and li != "unknown":
+            li_btn = ("<a href='" + li + "' target='_blank' style='display:inline-block;"
+                      "background:#0a66c2;color:white;font-size:11px;font-weight:500;"
+                      "padding:4px 12px;border-radius:4px;text-decoration:none;margin-left:8px;'>"
+                      "LinkedIn</a>")
+
+        rank_colors = ["#1B3A6B", "#2E75B6", "#4A90A4"]
+        rank_color  = rank_colors[min(rank, 2)]
+
+        return (
+            "<div style='background:white;border:1px solid #e2e8f0;border-radius:10px;"
+            "margin-bottom:16px;overflow:hidden;'>"
+
+            # Header bar with rank
+            "<div style='background:" + rank_color + ";padding:12px 18px;display:flex;"
+            "align-items:center;justify-content:space-between;'>"
+            "<div style='display:flex;align-items:center;gap:12px;'>"
+            "<div style='background:rgba(255,255,255,0.2);color:white;font-weight:700;"
+            "font-size:15px;width:28px;height:28px;border-radius:50%;display:flex;"
+            "align-items:center;justify-content:center;flex-shrink:0;'>#" + str(rank + 1) + "</div>"
+            "<div>"
+            "<div style='color:white;font-size:15px;font-weight:600;'>" + fn + li_btn + "</div>"
+            "<div style='color:rgba(255,255,255,0.8);font-size:12px;'>" + ft + " &middot; " + co + " &middot; " + vertical + "</div>"
+            "</div></div>"
+            "<div style='background:rgba(255,255,255,0.15);color:white;font-size:13px;"
+            "font-weight:600;padding:4px 12px;border-radius:20px;'>" + score + "</div>"
+            "</div>"
+
+            # Body
+            "<div style='padding:16px 18px;'>"
+
+            # Second Layer logic
+            "<div style='background:#f0f7ff;border-left:3px solid #2E75B6;padding:8px 12px;"
+            "border-radius:0 4px 4px 0;margin-bottom:12px;'>"
+            "<div style='font-size:10px;font-weight:600;color:#2E75B6;text-transform:uppercase;"
+            "letter-spacing:0.05em;margin-bottom:3px;'>Second Layer Logic</div>"
+            "<div style='font-size:12px;color:#334155;font-style:italic;'>" + sl + "</div>"
+            "</div>"
+
+            # Founder background
+            "<div style='margin-bottom:12px;'>"
+            "<div style='font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;"
+            "letter-spacing:0.05em;margin-bottom:3px;'>Founder Background</div>"
+            "<div style='font-size:13px;color:#1e293b;'>" + fbg + "</div>"
+            "</div>"
+
+            # What they do
+            "<div style='margin-bottom:14px;'>"
+            "<div style='font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;"
+            "letter-spacing:0.05em;margin-bottom:3px;'>What They Do</div>"
+            "<div style='font-size:13px;color:#1e293b;'>" + what + "</div>"
+            "</div>"
+
+            # Draft outreach
+            "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;'>"
+            "<div style='font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;"
+            "letter-spacing:0.05em;margin-bottom:8px;'>Draft Outreach</div>"
+            "<div style='font-size:12px;color:#334155;line-height:1.7;'>" + draft + "</div>"
+            "</div>"
+
+            "</div></div>"
+        )
+
+    if top3:
+        top3_html = (
+            "<div style='margin-bottom:24px;'>"
+            "<h2 style='color:#1B3A6B;font-size:14px;font-weight:600;margin-bottom:14px;"
+            "border-bottom:2px solid #C55A11;padding-bottom:6px;'>"
+            "Today's Top 3 Founders to Meet</h2>"
+            + "".join(founder_card(r, i) for i, r in enumerate(top3))
+            + "</div>"
+        )
     else:
-        cards = "<p style='color:#888;text-align:center;padding:30px;'>No companies met threshold today.</p>"
+        top3_html = (
+            "<div style='background:white;border:1px solid #e2e8f0;border-radius:8px;"
+            "padding:24px;text-align:center;color:#94a3b8;margin-bottom:24px;'>"
+            "No founders identified today — try tomorrow.</div>"
+        )
 
-    # ── Below threshold table ──────────────────────────────────────────────────
-    if below:
-        brows = []
-        for i, r in enumerate(below):
-            bg = "#ffffff" if i % 2 == 0 else "#f9f9f9"
-            brows.append(
+    # ── All scored companies table ──────────────────────────────────────────
+    if all_sorted:
+        all_rows = []
+        for i, r in enumerate(all_sorted):
+            bg      = "#ffffff" if i % 2 == 0 else "#f8fafc"
+            fn      = r.get("founder", {}).get("founder_name", "—")
+            score   = str(round(r.get("score_pct", 0), 1)) + "%"
+            dec     = r.get("decision", "")
+            sl_fit  = "Yes" if r.get("second_layer_alignment", False) else "No"
+            all_rows.append(
                 "<tr style='background:" + bg + ";'>"
-                + "<td style='padding:6px 10px;font-size:12px;'>" + str(r.get("company_name","")) + "</td>"
-                + "<td style='padding:6px 10px;font-size:11px;'>" + src_badge(str(r.get("source",""))) + "</td>"
-                + "<td style='padding:6px 10px;font-size:12px;color:#666;'>" + str(r.get("vertical","")) + "</td>"
-                + "<td style='padding:6px 10px;font-size:12px;font-weight:bold;text-align:center;'>" + str(round(r.get("score_pct",0),1)) + "%</td>"
-                + "<td style='padding:6px 10px;font-size:12px;'>" + str(r.get("decision","")) + "</td>"
-                + "<td style='padding:6px 10px;font-size:12px;color:#888;'>" + str(r.get("key_weakness","")) + "</td>"
-                + "</tr>"
+                "<td style='padding:7px 10px;font-size:12px;font-weight:500;color:#1e293b;'>" + r.get("company_name","") + "</td>"
+                "<td style='padding:7px 10px;font-size:11px;color:#64748b;'>" + src_badge(r.get("source","")) + "</td>"
+                "<td style='padding:7px 10px;font-size:12px;color:#334155;'>" + r.get("vertical","") + "</td>"
+                "<td style='padding:7px 10px;font-size:12px;color:#334155;'>" + fn + "</td>"
+                "<td style='padding:7px 10px;font-size:12px;font-weight:600;text-align:center;color:#1B3A6B;'>" + score + "</td>"
+                "<td style='padding:7px 10px;font-size:12px;'>" + dec + "</td>"
+                "</tr>"
             )
-        below_section = (
+        all_table = (
             "<div style='margin-bottom:20px;'>"
-            "<h2 style='color:#666;font-size:13px;border-bottom:1px solid #ddd;padding-bottom:5px;margin-bottom:8px;'>"
-            "Evaluated But Filtered (below " + str(int(MIN_SCORE_PCT)) + "%)</h2>"
-            "<table style='width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;'>"
-            "<tr style='background:#1b3a6b;'>"
-            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Company</th>"
-            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Source</th>"
-            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Vertical</th>"
-            "<th style='padding:7px 10px;color:white;font-size:11px;'>Score</th>"
-            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Decision</th>"
-            "<th style='padding:7px 10px;color:white;font-size:11px;text-align:left;'>Weakness</th>"
+            "<h2 style='color:#1B3A6B;font-size:14px;font-weight:600;margin-bottom:10px;"
+            "border-bottom:2px solid #2E75B6;padding-bottom:6px;'>All Scored Today</h2>"
+            "<table style='width:100%;border-collapse:collapse;background:white;"
+            "border-radius:8px;overflow:hidden;border:1px solid #e2e8f0;'>"
+            "<tr style='background:#1B3A6B;'>"
+            "<th style='padding:8px 10px;color:white;font-size:11px;text-align:left;'>Company</th>"
+            "<th style='padding:8px 10px;color:white;font-size:11px;text-align:left;'>Source</th>"
+            "<th style='padding:8px 10px;color:white;font-size:11px;text-align:left;'>Vertical</th>"
+            "<th style='padding:8px 10px;color:white;font-size:11px;text-align:left;'>Founder</th>"
+            "<th style='padding:8px 10px;color:white;font-size:11px;'>Score</th>"
+            "<th style='padding:8px 10px;color:white;font-size:11px;text-align:left;'>Decision</th>"
             "</tr>"
-            + "".join(brows)
+            + "".join(all_rows)
             + "</table></div>"
         )
     else:
-        below_section = ""
+        all_table = ""
 
-    # ── Founder outreach table ─────────────────────────────────────────────────
-    outreach_candidates = [
-        r for r in passing
-        if r.get("founder", {}).get("founder_name", "unknown") not in ["", "unknown"]
-    ]
-    if outreach_candidates:
-        orows = []
-        for i, r in enumerate(outreach_candidates):
-            bg      = "#ffffff" if i % 2 == 0 else "#f9f9f9"
-            founder = r.get("founder", {})
-            li_url  = founder.get("linkedin_url", "")
-            if li_url and li_url != "unknown":
-                li_btn = "<a href='" + li_url + "' target='_blank' style='color:#0a66c2;font-weight:bold;text-decoration:none;'>LinkedIn</a>"
-            else:
-                li_btn = "<span style='color:#aaa;'>-</span>"
-            orows.append(
-                "<tr style='background:" + bg + ";'>"
-                + "<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>" + str(r.get("company_name","")) + "</td>"
-                + "<td style='padding:8px 12px;font-size:12px;'>" + str(founder.get("founder_name","")) + "</td>"
-                + "<td style='padding:8px 12px;font-size:12px;color:#666;'>" + str(founder.get("founder_title","")) + "</td>"
-                + "<td style='padding:8px 12px;font-size:12px;'>" + str(r.get("vertical","")) + "</td>"
-                + "<td style='padding:8px 12px;font-size:12px;font-weight:bold;'>" + str(round(r.get("score_pct",0),1)) + "%</td>"
-                + "<td style='padding:8px 12px;font-size:12px;'>" + li_btn + "</td>"
-                + "</tr>"
-            )
-        outreach_section = (
-            "<div style='margin-bottom:20px;'>"
-            "<h2 style='color:#1b3a6b;font-size:15px;border-bottom:2px solid #c55a11;padding-bottom:5px;margin-bottom:8px;'>"
-            "Founder Outreach List</h2>"
-            "<p style='font-size:11px;color:#888;margin-bottom:10px;'>High-scoring companies with identified founders.</p>"
-            "<table style='width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;'>"
-            "<tr style='background:#1b3a6b;'>"
-            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Company</th>"
-            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Founder</th>"
-            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Title</th>"
-            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>Vertical</th>"
-            "<th style='padding:8px 12px;color:white;font-size:11px;'>Score</th>"
-            "<th style='padding:8px 12px;color:white;font-size:11px;text-align:left;'>LinkedIn</th>"
-            "</tr>"
-            + "".join(orows)
-            + "</table></div>"
-        )
-    else:
-        outreach_section = ""
-
-    # ── Assemble full HTML ─────────────────────────────────────────────────────
+    # Assemble HTML
     html = (
         "<!DOCTYPE html><html><head><meta charset='UTF-8'></head>"
-        "<body style='font-family:Arial,sans-serif;max-width:840px;margin:0 auto;background:#f4f6f9;padding:20px;'>"
-
-        # Header
-        "<div style='background:#1b3a6b;border-radius:10px 10px 0 0;padding:22px 26px;'>"
-        "<div style='color:white;font-size:20px;font-weight:bold;'>Second Layer VC Pipeline</div>"
-        "<div style='color:#aac4e8;font-size:12px;margin-top:3px;'>" + date_str + " - Daily Digest</div>"
-        "<div style='color:#d6e4f7;font-size:11px;margin-top:6px;'>Sources: " + src_summary + "</div>"
+        "<body style='font-family:Arial,sans-serif;max-width:820px;margin:0 auto;background:#f1f5f9;padding:20px;'>"
+        "<div style='background:#1B3A6B;border-radius:10px 10px 0 0;padding:20px 24px;'>"
+        "<div style='color:white;font-size:18px;font-weight:700;'>Second Layer VC Pipeline</div>"
+        "<div style='color:#93c5fd;font-size:12px;margin-top:2px;'>" + date_str + " &middot; Daily Digest</div>"
+        "<div style='color:#bfdbfe;font-size:11px;margin-top:4px;'>Sources: " + src_summary + "</div>"
         "</div>"
-
-        # Stats bar
-        "<div style='background:#2e75b6;padding:12px 26px;display:flex;gap:24px;margin-bottom:18px;'>"
-        "<div style='text-align:center;'><div style='color:white;font-size:22px;font-weight:bold;'>" + str(n_total) + "</div><div style='color:#aac4e8;font-size:10px;'>TODAY</div></div>"
-        "<div style='text-align:center;'><div style='color:#c6efce;font-size:22px;font-weight:bold;'>" + str(n_pass) + "</div><div style='color:#aac4e8;font-size:10px;'>PASSING</div></div>"
-        "<div style='text-align:center;'><div style='color:#ffc7ce;font-size:22px;font-weight:bold;'>" + str(n_total - n_pass) + "</div><div style='color:#aac4e8;font-size:10px;'>FILTERED</div></div>"
-        "<div style='text-align:center;'><div style='color:#ffeb9c;font-size:22px;font-weight:bold;'>" + str(round(pass_rate)) + "%</div><div style='color:#aac4e8;font-size:10px;'>PASS RATE</div></div>"
-        "<div style='text-align:center;border-left:1px solid #5a9fd4;padding-left:24px;'><div style='color:white;font-size:22px;font-weight:bold;'>" + str(total_seen) + "</div><div style='color:#aac4e8;font-size:10px;'>TOTAL PIPELINE</div></div>"
+        "<div style='background:#2E75B6;padding:10px 24px;display:flex;gap:20px;margin-bottom:20px;border-radius:0 0 8px 8px;'>"
+        "<div style='text-align:center;'><div style='color:white;font-size:20px;font-weight:700;'>" + str(n_total) + "</div><div style='color:#bfdbfe;font-size:10px;'>SCORED</div></div>"
+        "<div style='text-align:center;'><div style='color:#86efac;font-size:20px;font-weight:700;'>" + str(len(top3)) + "</div><div style='color:#bfdbfe;font-size:10px;'>OUTREACH READY</div></div>"
+        "<div style='text-align:center;border-left:1px solid #60a5fa;padding-left:20px;'>"
+        "<div style='color:white;font-size:20px;font-weight:700;'>" + str(total_seen) + "</div><div style='color:#bfdbfe;font-size:10px;'>TOTAL PIPELINE</div></div>"
         "</div>"
-
-        # Cards
-        "<div style='margin-bottom:22px;'>"
-        "<h2 style='color:#1b3a6b;font-size:15px;margin-bottom:12px;border-bottom:2px solid #2e75b6;padding-bottom:5px;'>"
-        "Meeting Threshold (>=" + str(int(MIN_SCORE_PCT)) + "%)</h2>"
-        + cards +
-        "</div>"
-
-        + below_section
-        + outreach_section
-
-        # Footer
-        + "<div style='text-align:center;color:#aaa;font-size:10px;margin-top:16px;padding-top:14px;border-top:1px solid #ddd;'>"
-        "Bryan Hanley - Second Layer VC Framework - Never repeats a company"
+        + top3_html
+        + all_table
+        + "<div style='text-align:center;color:#94a3b8;font-size:10px;margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0;'>"
+        "Bryan Hanley &middot; Second Layer VC Framework &middot; bryanhanleyvc.com"
         "</div>"
         "</body></html>"
     )
@@ -1360,6 +1467,7 @@ def build_email(results, date_str, total_seen):
     return subject, html
 
 
+# ── SEND EMAIL ─────────────────────────────────────────────────────────────────
 def send_email(subject, html_body):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -1369,7 +1477,7 @@ def send_email(subject, html_body):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(EMAIL_SENDER, EMAIL_PASSWORD)
         s.sendmail(EMAIL_SENDER, EMAIL_RECIPIENT, msg.as_string())
-    print(f"✅ Email sent: {subject}")
+    print(f"Email sent: {subject}")
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
@@ -1400,18 +1508,28 @@ def main():
         print(f"Scoring: {co['name']} ({co.get('source','')})")
         result = score_company(co)
         if result:
-            # Research founder for high-scoring companies only (saves API cost)
-            if result.get("score_pct", 0) >= 75:
-                result["founder"] = research_founder(result)
-                time.sleep(1)
-            else:
-                result["founder"] = {}
+            # Research founder for every scored company — pipeline goal is meetings, not just scores
+            result["founder"] = research_founder(result)
+            result["outreach_draft"] = ""  # filled in below for top 3
             results.append(result)
             print(f"  → {result.get('score_pct',0):.1f}% | {result.get('decision','')}")
+            time.sleep(1)
         else:
-            stage_gated += 1  # score_company returns None for stage gate fails too
-        time.sleep(10)  # 10s delay keeps Haiku under 50k token/min rate limit
+            stage_gated += 1
+        time.sleep(10)
     print(f"Stage gated (removed): {stage_gated}")
+
+    # Generate outreach drafts for top 3 companies with identified founders
+    results_sorted = sorted(results, key=lambda x: x.get("score_pct", 0), reverse=True)
+    outreach_count = 0
+    for r in results_sorted:
+        if outreach_count >= 3:
+            break
+        if r.get("founder", {}).get("founder_name", "unknown") != "unknown":
+            print(f"  Drafting outreach for {r.get('company_name','')}")
+            r["outreach_draft"] = draft_outreach(r)
+            outreach_count += 1
+            time.sleep(2)
 
     append_results_to_sheet(results, date_str)
     total_seen = len(previously_seen) + len(results)
