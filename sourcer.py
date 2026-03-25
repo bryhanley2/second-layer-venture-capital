@@ -1305,82 +1305,95 @@ def build_email(results, date_str, total_seen):
     top3 = [r for r in all_sorted if r.get("outreach_draft", "")][:3]
 
     def founder_card(r, rank):
-        founder    = r.get("founder", {})
-        fn         = founder.get("founder_name", "Unknown Founder")
-        ft         = founder.get("founder_title", "")
-        fbg        = founder.get("founder_background", "")
-        li         = founder.get("linkedin_url", "")
-        co         = r.get("company_name", "")
-        sl         = r.get("second_layer_logic", "")
-        what       = r.get("what_they_do", "")
-        score      = str(round(r.get("score_pct", 0), 1)) + "%"
-        decision   = r.get("decision", "")
-        draft      = r.get("outreach_draft", "").replace("\n", "<br>")
-        vertical   = r.get("vertical", "")
+        founder  = r.get("founder", {})
+        fn       = founder.get("founder_name", "Unknown Founder")
+        ft       = founder.get("founder_title", "")
+        fbg      = founder.get("founder_background", "")
+        li       = founder.get("linkedin_url", "")
+        co       = r.get("company_name", "")
+        sl       = r.get("second_layer_logic", "")
+        what     = r.get("what_they_do", "")
+        score    = str(round(r.get("score_pct", 0), 1)) + "%"
+        vertical = r.get("vertical", "")
+        brief    = r.get("outreach_draft", "")
 
-        li_btn = ""
-        if li and li != "unknown":
-            li_btn = ("<a href='" + li + "' target='_blank' style='display:inline-block;"
-                      "background:#0a66c2;color:white;font-size:11px;font-weight:500;"
-                      "padding:4px 12px;border-radius:4px;text-decoration:none;margin-left:8px;'>"
-                      "LinkedIn</a>")
+        # Format brief bullets as clean HTML list
+        brief_html = ""
+        if brief:
+            lines = [l.strip().lstrip("-").strip() for l in brief.split("\n") if l.strip().lstrip("-").strip()]
+            brief_html = "".join(
+                "<li style='margin-bottom:8px;color:#334155;font-size:13px;line-height:1.65;'>" + l + "</li>"
+                for l in lines
+            )
+            brief_html = "<ul style='margin:0;padding-left:18px;'>" + brief_html + "</ul>"
 
-        rank_colors = ["#1B3A6B", "#2E75B6", "#4A90A4"]
+        # LinkedIn button using the actual researched URL
+        if li and li not in ("unknown", ""):
+            li_btn = (
+                " <a href='" + li + "' target='_blank' "
+                "style='display:inline-block;background:#0a66c2;color:#ffffff;"
+                "font-size:10px;font-weight:600;padding:3px 10px;border-radius:3px;"
+                "text-decoration:none;vertical-align:middle;margin-left:6px;'>"
+                "LinkedIn &#8599;</a>"
+            )
+        else:
+            li_btn = ""
+
+        rank_colors = ["#1B3A6B", "#2E75B6", "#3B7A9E"]
         rank_color  = rank_colors[min(rank, 2)]
+        rank_labels = ["Top Pick", "2nd", "3rd"]
+        rank_label  = rank_labels[min(rank, 2)]
 
-        return (
-            "<div style='background:white;border:1px solid #e2e8f0;border-radius:10px;"
-            "margin-bottom:16px;overflow:hidden;'>"
-
-            # Header bar with rank
-            "<div style='background:" + rank_color + ";padding:12px 18px;display:flex;"
-            "align-items:center;justify-content:space-between;'>"
+        card = (
+            "<div style='background:#ffffff;border:1px solid #d1d9e6;border-radius:10px;"
+            "margin-bottom:20px;overflow:hidden;'>"
+            "<div style='background:{rc};padding:14px 20px;"
+            "display:flex;align-items:center;justify-content:space-between;'>"
             "<div style='display:flex;align-items:center;gap:12px;'>"
-            "<div style='background:rgba(255,255,255,0.2);color:white;font-weight:700;"
-            "font-size:15px;width:28px;height:28px;border-radius:50%;display:flex;"
-            "align-items:center;justify-content:center;flex-shrink:0;'>#" + str(rank + 1) + "</div>"
+            "<div style='background:rgba(255,255,255,0.18);color:#ffffff;font-weight:700;"
+            "font-size:11px;padding:3px 9px;border-radius:20px;white-space:nowrap;'>{rl}</div>"
             "<div>"
-            "<div style='color:white;font-size:15px;font-weight:600;'>" + fn + li_btn + "</div>"
-            "<div style='color:rgba(255,255,255,0.8);font-size:12px;'>" + ft + " &middot; " + co + " &middot; " + vertical + "</div>"
+            "<div style='color:#ffffff;font-size:15px;font-weight:600;line-height:1.3;'>{fn}{li_btn}</div>"
+            "<div style='color:rgba(255,255,255,0.78);font-size:12px;margin-top:2px;'>{ft_sep}{co} &nbsp;&middot;&nbsp; {vertical}</div>"
             "</div></div>"
-            "<div style='background:rgba(255,255,255,0.15);color:white;font-size:13px;"
-            "font-weight:600;padding:4px 12px;border-radius:20px;'>" + score + "</div>"
+            "<div style='background:rgba(255,255,255,0.18);color:#ffffff;font-size:13px;"
+            "font-weight:700;padding:5px 14px;border-radius:20px;white-space:nowrap;'>{score}</div>"
             "</div>"
-
-            # Body
-            "<div style='padding:16px 18px;'>"
-
-            # Second Layer logic
-            "<div style='background:#f0f7ff;border-left:3px solid #2E75B6;padding:8px 12px;"
-            "border-radius:0 4px 4px 0;margin-bottom:12px;'>"
-            "<div style='font-size:10px;font-weight:600;color:#2E75B6;text-transform:uppercase;"
-            "letter-spacing:0.05em;margin-bottom:3px;'>Second Layer Logic</div>"
-            "<div style='font-size:12px;color:#334155;font-style:italic;'>" + sl + "</div>"
+            "<div style='padding:18px 20px;'>"
+            "<div style='background:#EBF4FF;border-left:3px solid #2E75B6;padding:10px 14px;"
+            "border-radius:0 5px 5px 0;margin-bottom:14px;'>"
+            "<div style='font-size:10px;font-weight:700;color:#1B3A6B;text-transform:uppercase;"
+            "letter-spacing:0.06em;margin-bottom:4px;'>Second Layer Thesis</div>"
+            "<div style='font-size:13px;color:#1e3a5f;font-style:italic;line-height:1.6;'>{sl}</div>"
             "</div>"
-
-            # Founder background
-            "<div style='margin-bottom:12px;'>"
-            "<div style='font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;"
-            "letter-spacing:0.05em;margin-bottom:3px;'>Founder Background</div>"
-            "<div style='font-size:13px;color:#1e293b;'>" + fbg + "</div>"
+            "<div style='display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;'>"
+            "<div style='background:#f8fafc;border-radius:6px;padding:12px;'>"
+            "<div style='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;"
+            "letter-spacing:0.06em;margin-bottom:5px;'>Founder Background</div>"
+            "<div style='font-size:13px;color:#1e293b;line-height:1.6;'>{fbg}</div>"
             "</div>"
-
-            # What they do
-            "<div style='margin-bottom:14px;'>"
-            "<div style='font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;"
-            "letter-spacing:0.05em;margin-bottom:3px;'>What They Do</div>"
-            "<div style='font-size:13px;color:#1e293b;'>" + what + "</div>"
+            "<div style='background:#f8fafc;border-radius:6px;padding:12px;'>"
+            "<div style='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;"
+            "letter-spacing:0.06em;margin-bottom:5px;'>What They Build</div>"
+            "<div style='font-size:13px;color:#1e293b;line-height:1.6;'>{what}</div>"
             "</div>"
-
-            # Draft outreach
-            "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;'>"
-            "<div style='font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;"
-            "letter-spacing:0.05em;margin-bottom:8px;'>Outreach Intel</div>"
-            "<div style='font-size:12px;color:#334155;line-height:1.9;white-space:pre-line;'>" + draft + "</div>"
             "</div>"
-
+            "{brief_section}"
             "</div></div>"
+        ).format(
+            rc=rank_color, rl=rank_label, fn=fn, li_btn=li_btn,
+            ft_sep=(ft + " &nbsp;&middot;&nbsp; " if ft else ""),
+            co=co, vertical=vertical, score=score, sl=sl,
+            fbg=fbg, what=what,
+            brief_section=(
+                "<div style='background:#fafbfc;border:1px solid #e2e8f0;border-radius:6px;padding:14px;'>"
+                "<div style='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;"
+                "letter-spacing:0.06em;margin-bottom:10px;'>Outreach Intel</div>"
+                + brief_html +
+                "</div>"
+            ) if brief_html else ""
         )
+        return card
 
     if top3:
         top3_html = (
