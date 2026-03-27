@@ -1059,23 +1059,18 @@ def score_company(co):
 # ── FOUNDER RESEARCH ──────────────────────────────────────────────────────────
 def research_founder(company: dict) -> dict:
     """
-    Researches the founder of every scored company.
-    Uses a two-step approach:
-      1. Ask Haiku to identify the founder name and title (from training knowledge)
-      2. Search the web to find and verify the actual LinkedIn profile URL
-    This prevents hallucinated LinkedIn URLs from reaching the email digest.
+    Identifies the founder name, title, and background for every scored company.
+    No LinkedIn URL — Bryan researches founders directly before outreach.
     """
     co_name  = company.get("company_name", "")
     what     = company.get("what_they_do", "")
     vertical = company.get("vertical", "")
-    sl_logic = company.get("second_layer_logic", "")
 
     default = {"founder_name": "unknown", "founder_title": "unknown",
                "linkedin_url": "unknown", "founder_background": "unknown",
                "outreach_hook": "unknown"}
 
-    # ── Step 1: Identify founder name + background (no URL guessing) ──────────
-    id_prompt = f"""You are a startup researcher.
+    prompt = f"""You are a startup researcher.
 
 Company: {co_name}
 What they do: {what}
@@ -1089,80 +1084,24 @@ Identify the founder(s) of this company. Return ONLY valid JSON:
   "outreach_hook": "One sentence on why their background is compelling relative to what they are building"
 }}
 
-Do NOT include a LinkedIn URL — that will be verified separately.
 If you do not know the founder, return unknown for all fields."""
 
     try:
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
-            messages=[{"role": "user", "content": id_prompt}]
+            messages=[{"role": "user", "content": prompt}]
         )
         raw   = re.sub(r"^```json\s*|^```\s*|\s*```$", "", resp.content[0].text.strip())
         match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
-            return default
-        data = json.loads(match.group())
-        fn   = data.get("founder_name", "unknown")
-        if not fn or fn == "unknown":
-            return default
+        if match:
+            data = json.loads(match.group())
+            print(f"  Founder: {data.get('founder_name','unknown')}")
+            return data
     except Exception as e:
-        print(f"  Founder ID error: {e}")
-        return default
+        print(f"  Founder research error: {e}")
+    return default
 
-    # ── Step 2: Search web for verified LinkedIn URL ───────────────────────────
-    data["linkedin_url"] = "unknown"
-    try:
-        query = f"{fn} {co_name} LinkedIn"
-        search_resp = requests.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            headers={"Accept": "application/json",
-                     "Accept-Encoding": "gzip",
-                     "X-Subscription-Token": os.environ.get("BRAVE_API_KEY", "")},
-            params={"q": query, "count": 5},
-            timeout=10
-        )
-        if search_resp.status_code == 200:
-            results = search_resp.json().get("web", {}).get("results", [])
-            for r in results:
-                url = r.get("url", "")
-                # Only accept clean linkedin.com/in/ profile URLs
-                if "linkedin.com/in/" in url:
-                    # Quick sanity check: founder name words should appear in URL or title
-                    name_parts = fn.lower().split()
-                    title_lower = r.get("title", "").lower()
-                    desc_lower  = r.get("description", "").lower()
-                    if any(p in url.lower() or p in title_lower or p in desc_lower
-                           for p in name_parts):
-                        # Strip query params for a clean URL
-                        clean_url = url.split("?")[0].rstrip("/")
-                        data["linkedin_url"] = clean_url
-                        print(f"  Founder: {fn} — {clean_url}")
-                        break
-    except Exception as e:
-        print(f"  LinkedIn search error: {e}")
-
-    # Fallback: try DuckDuckGo if Brave key not available or returned nothing
-    if data["linkedin_url"] == "unknown":
-        try:
-            query   = f'site:linkedin.com/in "{fn}" "{co_name}"'
-            ddg_resp = requests.get(
-                "https://html.duckduckgo.com/html/",
-                headers={"User-Agent": "Mozilla/5.0"},
-                params={"q": query},
-                timeout=10
-            )
-            # Parse any linkedin.com/in/ URLs from the response
-            li_urls = re.findall(r'https://(?:www\.)?linkedin\.com/in/[a-zA-Z0-9\-]+', ddg_resp.text)
-            if li_urls:
-                data["linkedin_url"] = li_urls[0].split("?")[0].rstrip("/")
-                print(f"  Founder (DDG): {fn} — {data['linkedin_url']}")
-        except Exception as e:
-            print(f"  DDG fallback error: {e}")
-
-    if data["linkedin_url"] == "unknown":
-        print(f"  Founder: {fn} — LinkedIn not found")
-    return data
 
 
 # ── OUTREACH DRAFT ────────────────────────────────────────────────────────────
