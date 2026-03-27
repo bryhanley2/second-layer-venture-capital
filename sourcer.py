@@ -1498,7 +1498,7 @@ def send_email(subject, html_body):
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     today    = datetime.date.today()
-    date_str = today.strftime("%A, %B %d %Y")
+    date_str = today.strftime("%Y-%m-%d")
     print(f"=== Second Layer Pipeline v4: {date_str} ===")
 
     print("Loading previously seen companies...")
