@@ -22,7 +22,11 @@ import requests
 COLUMNS = [
     "Date",
     "Company",
-    "Founded",
+    # Founder info — front and centre for easy scanning
+    "Founder Name",
+    "Founder Title",
+    "Founder Background",
+    # Company info
     "Stage",
     "Raise",
     "Vertical",
@@ -30,15 +34,13 @@ COLUMNS = [
     "Second Layer Logic",
     "What They Do",
     "Second Layer Aligned",
-    # 11 factor scores
+    # Factor scores
     "1A Founder-Mkt Fit",
     "1B Tech Execution",
     "1C Commitment",
     "2A Early PMF",
-    "2B Revenue",
     "3A TAM",
     "3B Timing",
-    "4 Traction Q",
     "5 Traction Qual",
     "6 Cap Efficiency",
     "7 Investor Signal",
@@ -48,11 +50,6 @@ COLUMNS = [
     "Decision",
     "Key Strength",
     "Key Weakness",
-    # Founder info
-    "Founder Name",
-    "Founder Title",
-    "LinkedIn URL",
-    "Founder Background",
     # Outreach tracker — fill in manually
     "Outreach Sent (Y/N)",
     "Outreach Date",
@@ -63,7 +60,7 @@ COLUMNS = [
     "Notes",
 ]
 
-SCORE_KEYS = ["1A","1B","1C","2A","2B","3A","3B","4","5","6","7"]
+SCORE_KEYS = ["1A","1B","1C","2A","3A","3B","5","6","7"]
 
 
 def _get_access_token(service_account_json: str) -> str:
@@ -168,12 +165,16 @@ def ensure_header_row(sheet_id: str, token: str):
 
 def company_to_row(result: dict, date_str: str) -> list:
     """Converts a scored company dict into a flat row matching COLUMNS."""
-    scores = result.get("scores", {})
+    scores  = result.get("scores", {})
     founder = result.get("founder", {})
     return [
         date_str,
         result.get("company_name", ""),
-        result.get("founded", ""),
+        # Founder info — columns 3-5
+        founder.get("founder_name", ""),
+        founder.get("founder_title", ""),
+        founder.get("founder_background", ""),
+        # Company info
         result.get("stage", ""),
         result.get("raise", ""),
         result.get("vertical", ""),
@@ -181,27 +182,22 @@ def company_to_row(result: dict, date_str: str) -> list:
         result.get("second_layer_logic", ""),
         result.get("what_they_do", ""),
         "Yes" if result.get("second_layer_alignment") else "No",
+        # Factor scores (9-factor early-stage rubric — 2B and 4 dropped)
         scores.get("1A", ""),
         scores.get("1B", ""),
         scores.get("1C", ""),
         scores.get("2A", ""),
-        scores.get("2B", ""),
         scores.get("3A", ""),
         scores.get("3B", ""),
-        scores.get("4", ""),
         scores.get("5", ""),
         scores.get("6", ""),
         scores.get("7", ""),
+        # Summary
         result.get("weighted_score", ""),
         result.get("score_pct", ""),
         result.get("decision", ""),
         result.get("key_strength", ""),
         result.get("key_weakness", ""),
-        # Founder info
-        founder.get("founder_name", ""),
-        founder.get("founder_title", ""),
-        founder.get("linkedin_url", ""),
-        founder.get("founder_background", ""),
         # Outreach tracker — left blank for manual entry
         "", "", "", "", "", "", "",
     ]
