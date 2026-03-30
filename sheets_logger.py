@@ -22,11 +22,6 @@ import requests
 COLUMNS = [
     "Date",
     "Company",
-    # Founder info — front and centre for easy scanning
-    "Founder Name",
-    "Founder Title",
-    "Founder Background",
-    # Company info
     "Stage",
     "Raise",
     "Vertical",
@@ -50,14 +45,12 @@ COLUMNS = [
     "Decision",
     "Key Strength",
     "Key Weakness",
-    # Outreach tracker — fill in manually
-    "Outreach Sent (Y/N)",
-    "Outreach Date",
-    "Response Received (Y/N)",
-    "Response Date",
-    "Meeting Booked (Y/N)",
-    "Meeting Date",
-    "Notes",
+]
+
+# Columns for the "Founder Pipeline" tab — must match sheet exactly
+# A          B               C        D          E                    F         G          H       I       J                  K             L                 M                N
+FOUNDER_COLUMNS = [
+    "Company", "Founder Name", "Title", "Vertical", "Second Layer Logic", "Score %", "Decision", "Stage", "Raise", "Source / Session", "Date Added", "Outreach Status", "Last Contacted", "Notes",
 ]
 
 SCORE_KEYS = ["1A","1B","1C","2A","3A","3B","5","6","7"]
@@ -134,47 +127,12 @@ def _get_access_token(service_account_json: str) -> str:
         return resp.json()["access_token"]
 
 
-def ensure_header_row(sheet_id: str, token: str):
-    """
-    Checks if row 1 has headers. If the sheet is empty, writes the header row.
-    """
-    url = (
-        f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-        f"/values/Pipeline!A1:Z1"
-    )
-    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"})
-    data = resp.json()
-    existing = data.get("values", [])
-
-    if not existing or existing[0][0] != "Date":
-        # Write header row
-        write_url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-            f"/values/Pipeline!A1:Z1?valueInputOption=RAW"
-        )
-        requests.put(
-            write_url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={"values": [COLUMNS]},
-        )
-        print("✅ Sheet header row created")
-
-
 def company_to_row(result: dict, date_str: str) -> list:
-    """Converts a scored company dict into a flat row matching COLUMNS."""
-    scores  = result.get("scores", {})
-    founder = result.get("founder", {})
+    """Converts a scored company dict into a flat row for the Pipeline tab."""
+    scores = result.get("scores", {})
     return [
         date_str,
         result.get("company_name", ""),
-        # Founder info — columns 3-5
-        founder.get("founder_name", ""),
-        founder.get("founder_title", ""),
-        founder.get("founder_background", ""),
-        # Company info
         result.get("stage", ""),
         result.get("raise", ""),
         result.get("vertical", ""),
@@ -182,7 +140,6 @@ def company_to_row(result: dict, date_str: str) -> list:
         result.get("second_layer_logic", ""),
         result.get("what_they_do", ""),
         "Yes" if result.get("second_layer_alignment") else "No",
-        # Factor scores (9-factor early-stage rubric — 2B and 4 dropped)
         scores.get("1A", ""),
         scores.get("1B", ""),
         scores.get("1C", ""),
@@ -192,14 +149,37 @@ def company_to_row(result: dict, date_str: str) -> list:
         scores.get("5", ""),
         scores.get("6", ""),
         scores.get("7", ""),
-        # Summary
         result.get("weighted_score", ""),
         result.get("score_pct", ""),
         result.get("decision", ""),
         result.get("key_strength", ""),
         result.get("key_weakness", ""),
-        # Outreach tracker — left blank for manual entry
-        "", "", "", "", "", "", "",
+    ]
+
+
+def founder_to_row(result: dict, date_str: str) -> list:
+    """Converts a scored company dict into a flat row for the Founder Pipeline tab.
+    Column order matches the existing sheet exactly:
+    Company | Founder Name | Title | Vertical | Second Layer Logic |
+    Score % | Decision | Stage | Raise | Source / Session |
+    Date Added | Outreach Status | Last Contacted | Notes
+    """
+    founder = result.get("founder", {})
+    return [
+        result.get("company_name", ""),           # A: Company
+        founder.get("founder_name", ""),           # B: Founder Name
+        founder.get("founder_title", ""),          # C: Title
+        result.get("vertical", ""),                # D: Vertical
+        result.get("second_layer_logic", ""),      # E: Second Layer Logic
+        result.get("score_pct", ""),               # F: Score %
+        result.get("decision", ""),                # G: Decision
+        result.get("stage", ""),                   # H: Stage
+        result.get("raise", ""),                   # I: Raise
+        result.get("source", ""),                  # J: Source / Session
+        date_str,                                  # K: Date Added
+        "Not Started",                             # L: Outreach Status
+        "",                                        # M: Last Contacted
+        "",                                        # N: Notes
     ]
 
 
@@ -231,18 +211,63 @@ def get_previously_seen_companies() -> set:
         return set()
 
 
-def append_results_to_sheet(results: list[dict], date_str: str):
+def _ensure_tab(sheet_meta_url: str, token: str, sheet_names: list, tab_name: str):
+    """Creates a tab if it doesn't already exist."""
+    if tab_name not in sheet_names:
+        requests.post(
+            f"{sheet_meta_url}:batchUpdate",
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            json={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+        )
+        print(f"Created '{tab_name}' tab")
+
+
+def _ensure_header(sheet_id: str, token: str, tab: str, headers: list):
+    """Writes header row to a tab if it's empty."""
+    url  = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{tab}!A1:Z1"
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    existing = resp.json().get("values", [])
+    if not existing or existing[0][0] != headers[0]:
+        write_url = f"{url}?valueInputOption=RAW"
+        requests.put(
+            write_url,
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            json={"values": [headers]},
+        )
+        print(f"Header row written to '{tab}'")
+
+
+def _append_rows(sheet_id: str, token: str, tab: str, rows: list):
+    """Appends rows to a tab."""
+    url  = (f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+            f"/values/{tab}!A:Z:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS")
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"},
+        json={"values": rows},
+    )
+    if resp.status_code == 200:
+        n = resp.json().get("updates", {}).get("updatedRows", len(rows))
+        print(f"  {n} rows added to '{tab}'")
+    else:
+        print(f"  Sheets API error on '{tab}': {resp.status_code} — {resp.text[:200]}")
+
+
+def append_results_to_sheet(results: list, date_str: str):
     """
-    Main function — appends all scored companies from today's run to the sheet.
-    Call this from sourcer.py main() after scoring is complete.
+    Writes scored companies to two tabs:
+      - Pipeline     : every scored company, full scoring data, no founder info
+      - Founder Pipeline : top founders only (identified + score >= 65%), outreach tracker
     """
     sa_json  = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
 
     print(f"DEBUG append: sa_json length={len(sa_json)}, sheet_id='{sheet_id}'")
     if not sa_json or not sheet_id:
-        print("⚠️  Google Sheets logging skipped — secrets not configured.")
-        print("    Add GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEET_ID to GitHub Secrets.")
+        print("Google Sheets logging skipped — secrets not configured.")
         return
 
     if not results:
@@ -253,49 +278,45 @@ def append_results_to_sheet(results: list[dict], date_str: str):
         print("Logging to Google Sheets...")
         token = _get_access_token(sa_json)
 
-        # Ensure the tab exists — create "Pipeline" tab if needed
         sheet_meta_url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-        meta = requests.get(
+        meta           = requests.get(
             sheet_meta_url,
             headers={"Authorization": f"Bearer {token}"}
         ).json()
-
         sheet_names = [s["properties"]["title"] for s in meta.get("sheets", [])]
-        if "Pipeline" not in sheet_names:
-            requests.post(
-                f"{sheet_meta_url}:batchUpdate",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                json={"requests": [{"addSheet": {"properties": {"title": "Pipeline"}}}]},
-            )
-            print("✅ Created 'Pipeline' tab")
 
-        ensure_header_row(sheet_id, token)
+        # ── Tab 1: Pipeline — every scored company ────────────────────────────
+        _ensure_tab(sheet_meta_url, token, sheet_names, "Pipeline")
+        _ensure_header(sheet_id, token, "Pipeline", COLUMNS)
+        pipeline_rows = [company_to_row(r, date_str) for r in results]
+        _append_rows(sheet_id, token, "Pipeline", pipeline_rows)
 
-        # Append rows
-        rows = [company_to_row(r, date_str) for r in results]
-        append_url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-            f"/values/Pipeline!A:Z:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
-        )
-        resp = requests.post(
-            append_url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={"values": rows},
-        )
+        # ── Tab 2: Founder Pipeline — top founders with identified names ──────
+        _ensure_tab(sheet_meta_url, token, sheet_names, "Founder Pipeline")
 
-        if resp.status_code == 200:
-            updates = resp.json().get("updates", {})
-            print(f"✅ Logged {len(rows)} companies to Google Sheets "
-                  f"({updates.get('updatedRows', '?')} rows added)")
+        # Sheet already has title (row 1), subtitle (row 2), header (row 3)
+        # Only write header if the tab is brand new (empty)
+        fp_check = requests.get(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/Founder Pipeline!A3:A3",
+            headers={"Authorization": f"Bearer {token}"}
+        ).json()
+        if not fp_check.get("values"):
+            _ensure_header(sheet_id, token, "Founder Pipeline", FOUNDER_COLUMNS)
+
+        top_founders = [
+            r for r in sorted(results,
+                               key=lambda x: x.get("score_pct", 0),
+                               reverse=True)
+            if r.get("founder", {}).get("founder_name", "unknown") not in ("", "unknown")
+        ]
+
+        if top_founders:
+            founder_rows = [founder_to_row(r, date_str) for r in top_founders]
+            _append_rows(sheet_id, token, "Founder Pipeline", founder_rows)
+            print(f"  {len(founder_rows)} founders added to 'Founder Pipeline'")
         else:
-            print(f"⚠️  Sheets API error: {resp.status_code} — {resp.text[:200]}")
+            print("  No identified founders to add to Founder Pipeline today")
 
     except Exception as e:
-        print(f"⚠️  Google Sheets logging failed: {e}")
-        print("    Pipeline will continue — email digest unaffected.")
+        print(f"Google Sheets logging failed: {e}")
+        print("Pipeline will continue — email digest unaffected.")
