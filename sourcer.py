@@ -1523,25 +1523,33 @@ def main():
         print(f"Scoring: {co['name']} ({co.get('source','')})")
         result = score_company(co)
         if result:
-            # Research founder for every scored company — pipeline goal is meetings, not just scores
-            result["founder"] = research_founder(result)
-            result["outreach_draft"] = ""  # filled in below for top 3
+            result["founder"] = {}       # populated after scoring for top scorers only
+            result["outreach_draft"] = ""
             results.append(result)
             print(f"  → {result.get('score_pct',0):.1f}% | {result.get('decision','')}")
-            time.sleep(1)
         else:
             stage_gated += 1
         time.sleep(10)
     print(f"Stage gated (removed): {stage_gated}")
 
-    # Generate outreach drafts for top 3 companies with identified founders
+    # Sort all results by score descending — this order is used everywhere below
     results_sorted = sorted(results, key=lambda x: x.get("score_pct", 0), reverse=True)
+
+    # Run founder research only on top 10 highest-scoring companies
+    # No point researching founders for low-scoring companies that won't surface
+    TOP_RESEARCH_N = 10
+    for r in results_sorted[:TOP_RESEARCH_N]:
+        r["founder"] = research_founder(r)
+        time.sleep(1)
+
+    # Generate outreach intel (founder brief) for the top 3 where a founder was identified
+    # These become the "Top 3 Founders to Meet" cards in the email digest
     outreach_count = 0
     for r in results_sorted:
         if outreach_count >= 3:
             break
-        if r.get("founder", {}).get("founder_name", "unknown") != "unknown":
-            print(f"  Building founder brief for {r.get('company_name','')}")
+        if r.get("founder", {}).get("founder_name", "unknown") not in ("", "unknown"):
+            print(f"  Building founder brief for {r.get('company_name','')} ({r.get('score_pct',0):.1f}%)")
             r["outreach_draft"] = founder_brief(r)
             outreach_count += 1
             time.sleep(2)
