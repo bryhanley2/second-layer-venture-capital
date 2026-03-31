@@ -308,6 +308,8 @@ def append_results_to_sheet(results: list, date_str: str):
                                key=lambda x: x.get("score_pct", 0),
                                reverse=True)
             if r.get("founder", {}).get("founder_name", "unknown") not in ("", "unknown")
+            and r.get("second_layer_alignment", False)
+            and r.get("score_pct", 0) >= 65
         ]
 
         if top_founders:
