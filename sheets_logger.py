@@ -239,24 +239,233 @@ def _ensure_header(sheet_id: str, token: str, tab: str, headers: list):
         print(f"Header row written to '{tab}'")
 
 
-def _append_rows(sheet_id: str, token: str, tab: str, rows: list):
-    """Appends rows to a tab."""
+def _get_last_row(sheet_id: str, token: str, tab: str) -> int:
+    """
+    Finds the true last occupied row in column A of a tab by reading all values.
+    Returns the row number (1-indexed) of the last non-empty cell in column A.
+    Falls back to row 1 if the tab is empty.
+    """
     url  = (f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-            f"/values/{tab}!A:Z:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS")
-    resp = requests.post(
+            f"/values/{tab}!A:A")
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    values = resp.json().get("values", [])
+    # Walk backwards to find the last non-empty cell
+    for i in range(len(values) - 1, -1, -1):
+        if values[i] and str(values[i][0]).strip():
+            return i + 1  # 1-indexed
+    return 0
+
+
+def _append_rows(sheet_id: str, token: str, tab: str, rows: list):
+    """
+    Writes rows directly after the last occupied row in the tab.
+    Explicitly finds the last row rather than relying on the Sheets API append
+    logic, which can misfire when there are blank rows or formatting sections
+    below the data (e.g. OUTREACH STATUS KEY blocks).
+    """
+    last_row   = _get_last_row(sheet_id, token, tab)
+    start_row  = last_row + 1
+    range_ref  = f"{tab}!A{start_row}"
+    url        = (f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+                  f"/values/{range_ref}?valueInputOption=RAW")
+    resp = requests.put(
         url,
         headers={"Authorization": f"Bearer {token}",
                  "Content-Type": "application/json"},
         json={"values": rows},
     )
     if resp.status_code == 200:
-        n = resp.json().get("updates", {}).get("updatedRows", len(rows))
-        print(f"  {n} rows added to '{tab}'")
+        updated = resp.json().get("updatedRows", len(rows))
+        print(f"  {updated} rows written to '{tab}' starting at row {start_row}")
     else:
         print(f"  Sheets API error on '{tab}': {resp.status_code} — {resp.text[:200]}")
 
 
-def append_results_to_sheet(results: list, date_str: str):
+def _rgb(hex_color: str) -> dict:
+    """Converts a hex color string to a Sheets API RGB object (0-1 scale)."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return {"red": r / 255, "green": g / 255, "blue": b / 255}
+
+
+def _get_sheet_id(sheet_meta_url: str, token: str, tab_name: str) -> int:
+    """Returns the numeric sheetId for a named tab."""
+    meta = requests.get(
+        sheet_meta_url,
+        headers={"Authorization": f"Bearer {token}"}
+    ).json()
+    for s in meta.get("sheets", []):
+        if s["properties"]["title"] == tab_name:
+            return s["properties"]["sheetId"]
+    return 0
+
+
+def _format_founder_rows(sheet_id: str, sheet_meta_url: str, token: str,
+                          start_row: int, num_rows: int, rows: list):
+    """
+    Applies formatting to newly written Founder Pipeline rows to match
+    the existing CRM styling:
+      - Alternating row backgrounds (white / light grey)
+      - Bold font for Founder Name (col B)
+      - Decision column (col G) colour-coded by rating
+      - Arial font, size 10, vertically centered, text wrap on all cells
+      - Thin border on all cells
+    Row indices are 0-based in the Sheets API (start_row - 1).
+    """
+    tab_sheet_id = _get_sheet_id(sheet_meta_url, token, "Founder Pipeline")
+
+    # Colour map for Decision column (col index 6 = G)
+    DECISION_COLORS = {
+        "strong yes": {"bg": "D1FAE5", "fg": "065F46"},
+        "yes":        {"bg": "EAF3DE", "fg": "3B6D11"},
+        "deep dive":  {"bg": "FFF8E1", "fg": "854F0B"},
+        "pass":       {"bg": "FCEBEB", "fg": "A32D2D"},
+    }
+
+    ROW_BG_EVEN = "FFFFFF"  # white
+    ROW_BG_ODD  = "F8FAFC"  # light grey
+
+    border_style = {
+        "style": "SOLID",
+        "width": 1,
+        "color": _rgb("D1D9E6"),
+    }
+
+    def cell_border():
+        return {k: border_style for k in ("top", "bottom", "left", "right")}
+
+    batch_requests = []
+
+    for i, row_data in enumerate(rows):
+        row_idx = (start_row - 1) + i   # 0-based
+        is_even = ((start_row + i) % 2 == 0)
+        row_bg  = ROW_BG_EVEN if is_even else ROW_BG_ODD
+
+        # ── Base row formatting — all 14 columns ─────────────────────────────
+        batch_requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId":          tab_sheet_id,
+                    "startRowIndex":    row_idx,
+                    "endRowIndex":      row_idx + 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex":   14,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": _rgb(row_bg),
+                        "textFormat": {
+                            "fontFamily": "Arial",
+                            "fontSize":   10,
+                            "bold":       False,
+                            "foregroundColor": _rgb("1E293B"),
+                        },
+                        "verticalAlignment":   "MIDDLE",
+                        "wrapStrategy":        "WRAP",
+                        "borders":             cell_border(),
+                    }
+                },
+                "fields": ("userEnteredFormat(backgroundColor,textFormat,"
+                           "verticalAlignment,wrapStrategy,borders)"),
+            }
+        })
+
+        # ── Founder Name (col B = index 1) — bold ────────────────────────────
+        batch_requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId":          tab_sheet_id,
+                    "startRowIndex":    row_idx,
+                    "endRowIndex":      row_idx + 1,
+                    "startColumnIndex": 1,
+                    "endColumnIndex":   2,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "fontFamily": "Arial",
+                            "fontSize":   10,
+                            "bold":       True,
+                            "foregroundColor": _rgb("1B3A6B"),
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.textFormat",
+            }
+        })
+
+        # ── Decision (col G = index 6) — colour by rating ────────────────────
+        decision_val = str(row_data[6]).lower() if len(row_data) > 6 else ""
+        dec_colors   = None
+        for key, colors in DECISION_COLORS.items():
+            if key in decision_val:
+                dec_colors = colors
+                break
+
+        if dec_colors:
+            batch_requests.append({
+                "repeatCell": {
+                    "range": {
+                        "sheetId":          tab_sheet_id,
+                        "startRowIndex":    row_idx,
+                        "endRowIndex":      row_idx + 1,
+                        "startColumnIndex": 6,
+                        "endColumnIndex":   7,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": _rgb(dec_colors["bg"]),
+                            "textFormat": {
+                                "fontFamily":      "Arial",
+                                "fontSize":        10,
+                                "bold":            True,
+                                "foregroundColor": _rgb(dec_colors["fg"]),
+                            },
+                            "horizontalAlignment": "CENTER",
+                        }
+                    },
+                    "fields": ("userEnteredFormat(backgroundColor,textFormat,"
+                               "horizontalAlignment)"),
+                }
+            })
+
+        # ── Score % (col F = index 5) — bold, navy, centred ─────────────────
+        batch_requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId":          tab_sheet_id,
+                    "startRowIndex":    row_idx,
+                    "endRowIndex":      row_idx + 1,
+                    "startColumnIndex": 5,
+                    "endColumnIndex":   6,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "fontFamily":      "Arial",
+                            "fontSize":        10,
+                            "bold":            True,
+                            "foregroundColor": _rgb("1B3A6B"),
+                        },
+                        "horizontalAlignment": "CENTER",
+                    }
+                },
+                "fields": ("userEnteredFormat(textFormat,horizontalAlignment)"),
+            }
+        })
+
+    # Send all formatting in one batch request
+    if batch_requests:
+        resp = requests.post(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}:batchUpdate",
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            json={"requests": batch_requests},
+        )
+        if resp.status_code == 200:
+            print(f"  Formatting applied to {num_rows} rows in 'Founder Pipeline'")
+        else:
+            print(f"  Formatting warning: {resp.status_code} — {resp.text[:200]}")
     """
     Writes scored companies to two tabs:
       - Pipeline     : every scored company, full scoring data, no founder info
@@ -313,8 +522,13 @@ def append_results_to_sheet(results: list, date_str: str):
         ]
 
         if top_founders:
-            founder_rows = [founder_to_row(r, date_str) for r in top_founders]
+            founder_rows  = [founder_to_row(r, date_str) for r in top_founders]
+            start_row     = _get_last_row(sheet_id, token, "Founder Pipeline") + 1
             _append_rows(sheet_id, token, "Founder Pipeline", founder_rows)
+            _format_founder_rows(
+                sheet_id, sheet_meta_url, token,
+                start_row, len(founder_rows), founder_rows
+            )
             print(f"  {len(founder_rows)} founders added to 'Founder Pipeline'")
         else:
             print("  No identified founders to add to Founder Pipeline today")
