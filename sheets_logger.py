@@ -466,9 +466,12 @@ def _format_founder_rows(sheet_id: str, sheet_meta_url: str, token: str,
             print(f"  Formatting applied to {num_rows} rows in 'Founder Pipeline'")
         else:
             print(f"  Formatting warning: {resp.status_code} — {resp.text[:200]}")
+
+
+def append_results_to_sheet(results: list, date_str: str):
     """
     Writes scored companies to two tabs:
-      - Pipeline     : every scored company, full scoring data, no founder info
+      - Pipeline         : every scored company, full scoring data
       - Founder Pipeline : top founders only (identified + score >= 65%), outreach tracker
     """
     sa_json  = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
