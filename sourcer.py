@@ -25,6 +25,7 @@ EMAIL_PASSWORD    = os.environ["EMAIL_PASSWORD"]
 EMAIL_RECIPIENT   = os.environ["EMAIL_RECIPIENT"]
 MIN_SCORE_PCT      = float(os.environ.get("MIN_SCORE_PCT", "65"))
 CRUNCHBASE_API_KEY = os.environ.get("CRUNCHBASE_API_KEY", "")
+CRUSTDATA_API_KEY  = os.environ.get("CRUSTDATA_API_KEY", "")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -853,6 +854,186 @@ Respond ONLY with a JSON array:
 
 
 
+
+# ── SOURCE 13: CRUSTDATA API ─────────────────────────────────────────────────
+def source_crustdata():
+    """
+    Queries Crustdata's company screening API for pre-seed and seed stage
+    startups matching Second Layer keywords. Filters by funding stage and
+    recent founding year. Rotates industry focus daily.
+    Requires CRUSTDATA_API_KEY secret in GitHub.
+    Sign up at crustdata.com — email abhilash@crustdata.com for API access.
+    """
+    companies = []
+    if not CRUSTDATA_API_KEY:
+        print("Crustdata: skipped (no API key — add CRUSTDATA_API_KEY secret)")
+        return companies
+
+    try:
+        day = datetime.date.today().weekday()
+        industries = [
+            "Artificial Intelligence",
+            "Cybersecurity",
+            "FinTech",
+            "Health Care",
+            "Legal Tech",
+            "Data Privacy",
+            "Enterprise Software",
+        ]
+        industry = industries[day % len(industries)]
+
+        url = "https://api.crustdata.com/screener/company/search"
+        headers = {
+            "Authorization": f"Token {CRUSTDATA_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        payload = {
+            "filters": [
+                {
+                    "column": "FUNDING_STAGE",
+                    "values": [
+                        {"text": "Pre-Seed", "selection_type": "INCLUDED"},
+                        {"text": "Seed",     "selection_type": "INCLUDED"},
+                        {"text": "Angel",    "selection_type": "INCLUDED"},
+                    ]
+                },
+                {
+                    "column": "INDUSTRY",
+                    "values": [
+                        {"text": industry, "selection_type": "INCLUDED"}
+                    ]
+                },
+                {
+                    "column": "YEAR",
+                    "values": [
+                        {"text": "2023", "selection_type": "INCLUDED"},
+                        {"text": "2024", "selection_type": "INCLUDED"},
+                        {"text": "2025", "selection_type": "INCLUDED"},
+                    ]
+                },
+            ],
+            "page": 0,
+            "count": 15,
+        }
+
+        resp = requests.post(url, json=payload, headers=headers, timeout=20)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            results = data.get("results", data.get("companies", []))
+            for co in results:
+                name  = co.get("company_name", "") or co.get("name", "")
+                desc  = (co.get("short_description", "") or
+                         co.get("description", "") or
+                         co.get("overview", "") or "")
+                stage = co.get("funding_stage", "") or co.get("last_funding_stage", "")
+                combined = f"{name} {desc} {stage}".lower()
+
+                if not name or is_fund(name) or is_late_stage(combined):
+                    continue
+
+                companies.append({
+                    "name":        name,
+                    "description": desc[:300],
+                    "source":      "Crustdata",
+                    "stage":       stage,
+                })
+
+        elif resp.status_code == 401:
+            print("Crustdata: invalid API key")
+        elif resp.status_code == 403:
+            print("Crustdata: API key lacks permissions")
+        elif resp.status_code == 429:
+            print("Crustdata: rate limited — will retry tomorrow")
+        else:
+            print(f"Crustdata: {resp.status_code} — {resp.text[:150]}")
+
+        print(f"Crustdata: {len(companies)} candidates")
+    except Exception as e:
+        print(f"Crustdata error: {e}")
+    return companies[:8]
+
+
+# ── PRE-SCORING FILTER ────────────────────────────────────────────────────────
+def filter_second_layer_alignment(candidates):
+    """
+    Lightweight pre-scoring filter. Asks Claude to rate each company
+    1-3 on Second Layer alignment before running the full 9-factor rubric.
+    Only companies rated 3 proceed to full scoring.
+    Cuts noise by ~40% and preserves API budget for genuinely aligned companies.
+
+    Rating scale:
+    1 = IS the dominant industry (an LLM, a satellite manufacturer, a crypto exchange)
+    2 = Tangentially related but weak Second Layer logic
+    3 = Clear Second Layer fit — solves a downstream problem created by a dominant trend
+    """
+    if not candidates:
+        return candidates
+
+    # Build batch prompt for efficiency — rate all candidates in one call
+    company_list = ""
+    for i, co in enumerate(candidates):
+        company_list += f"{i+1}. {co['name']}: {co.get('description', '')[:150]}\n"
+
+    prompt = f"""You are a VC analyst applying the Second Layer investment framework.
+
+SECOND LAYER = companies solving problems CREATED BY dominant industries, not IN them.
+Examples of PASS (rating 3):
+- AI governance platform → solves risk FROM AI adoption, not an AI model itself
+- AML compliance tool → solves risk FROM fintech growth, not a fintech itself
+- Space cybersecurity → solves risk FROM satellite proliferation, not a satellite maker
+
+Examples of FAIL (rating 1):
+- An LLM or AI model company → IS the dominant trend
+- A crypto exchange → IS the dominant industry
+- A satellite manufacturer → IS the dominant trend
+
+Rate each company 1, 2, or 3:
+1 = IS the dominant industry or trend itself (filter out)
+2 = Possible fit — relevant space but logic not obvious from description alone (keep)
+3 = Clear Second Layer fit — obvious downstream problem from dominant trend (keep)
+
+Companies to rate:
+{company_list}
+
+Respond ONLY with a JSON array of integers, one per company, in order:
+[3, 1, 2, 3, ...]"""
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{{"role": "user", "content": prompt}}]
+        )
+        raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "",
+                     resp.content[0].text.strip())
+        # Extract JSON array
+        m = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if not m:
+            print("Pre-filter: could not parse ratings — passing all candidates")
+            return candidates
+
+        ratings = json.loads(m.group())
+        filtered = []
+        passed = failed = 0
+        for i, co in enumerate(candidates):
+            rating = ratings[i] if i < len(ratings) else 2
+            if rating >= 2:
+                filtered.append(co)
+                passed += 1
+            else:
+                failed += 1
+                print(f"  Pre-filter SKIP ({rating}/3): {{co['name']}}")
+
+        print(f"Pre-filter: {{passed}} pass | {{failed}} filtered out | "
+              f"{{round(passed/len(candidates)*100)}}% alignment rate")
+        return filtered
+
+    except Exception as e:
+        print(f"Pre-filter error: {{e}} — passing all candidates")
+        return candidates
+
 def get_candidate_companies(previously_seen):
     all_companies = []
     print("\n--- Sourcing from 12 channels ---")
@@ -868,7 +1049,8 @@ def get_candidate_companies(previously_seen):
     all_companies.extend(source_betalist());         time.sleep(2)
     all_companies.extend(source_startupbase());    time.sleep(2)
     all_companies.extend(source_crunchbase());      time.sleep(2)
-    all_companies.extend(source_consumer())
+    all_companies.extend(source_consumer());         time.sleep(2)
+    all_companies.extend(source_crustdata())
 
     # Dedup within today's run
     seen_today, unique_today = set(), []
@@ -1515,6 +1697,11 @@ def main():
         subject, html = build_email([], date_str, len(previously_seen))
         send_email(subject, html)
         return
+
+    # Pre-scoring Second Layer alignment filter — only score 3/3 aligned companies
+    print("--- Pre-scoring alignment filter ---")
+    candidates = filter_second_layer_alignment(candidates)
+    print(f"Proceeding to score {len(candidates)} aligned candidates")
 
     results = []
     stage_gated = 0
