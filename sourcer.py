@@ -1484,15 +1484,18 @@ def build_email(results, date_str, total_seen):
 
 # ── SEND EMAIL ─────────────────────────────────────────────────────────────────
 def send_email(subject, html_body):
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = EMAIL_SENDER
-    msg["To"]      = EMAIL_RECIPIENT
-    msg.attach(MIMEText(html_body, "html"))
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-        s.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        s.sendmail(EMAIL_SENDER, EMAIL_RECIPIENT, msg.as_string())
-    print(f"Email sent: {subject}")
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = EMAIL_SENDER
+        msg["To"]      = EMAIL_RECIPIENT
+        msg.attach(MIMEText(html_body, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            s.sendmail(EMAIL_SENDER, EMAIL_RECIPIENT, msg.as_string())
+        print(f"Email sent: {subject}")
+    except Exception as e:
+        print(f"Email skipped (check App Password in secrets): {e}")
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
