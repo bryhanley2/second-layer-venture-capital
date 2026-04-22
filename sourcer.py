@@ -79,29 +79,41 @@ def source_crustdata_cache(client) -> list:
 # SOURCE 2: YC Algolia
 # ============================================================================
 def source_yc_algolia() -> list:
-    """Pull recent YC batches (W25, S25, W26)."""
+    """Pull recent YC batches via YC directory."""
     candidates = []
     batches = ["W25", "S25", "W26", "F25"]
     for batch in batches:
         try:
-            url = f"https://www.ycombinator.com/companies/directory.json?batch={batch}"
-            r = requests.get(url, timeout=20)
+            # Try the Algolia search API directly
+            url = "https://45bwzj1sgc-dsn.algolia.net/1/indexes/*/queries"
+            headers = {
+                "x-algolia-agent": "Algolia for JavaScript (4.14.3); Browser (lite)",
+                "x-algolia-api-key": "9f3b9a7fd6e66c93f2bec4e42e3eb94d",
+                "x-algolia-application-id": "45BWZJ1SGC",
+            }
+            payload = {
+                "requests": [{
+                    "indexName": "YCCompany_production",
+                    "params": f"query=&facetFilters=%5B%5B%22batch%3A{batch}%22%5D%5D&hitsPerPage=50"
+                }]
+            }
+            r = requests.post(url, json=payload, headers=headers, timeout=20)
             if r.status_code == 200:
-                data = r.json()
-                for c in data.get("companies", [])[:50]:
+                hits = r.json().get("results", [{}])[0].get("hits", [])
+                for c in hits:
                     candidates.append({
                         "name": c.get("name", ""),
                         "website": c.get("website", ""),
                         "description": c.get("long_description", c.get("one_liner", "")),
                         "industry": c.get("industry", ""),
-                        "hq_city": c.get("location", ""),
-                        "hq_country": "United States",  # Most YC companies
-                        "founded_date": str(c.get("launched_at", "")),
+                        "hq_city": c.get("city", ""),
+                        "hq_country": "United States",
+                        "founded_date": str(c.get("year_founded", datetime.now().year)),
                         "headcount": c.get("team_size", 0),
-                        "total_funding_usd": 0,  # YC seed only, assume <$500K
+                        "total_funding_usd": 0,
                         "last_funding_round": "seed",
                         "last_funding_date": "",
-                        "linkedin_url": "",
+                        "linkedin_url": c.get("linkedin_url", ""),
                         "_source": f"YC {batch}",
                     })
         except Exception as e:
@@ -154,38 +166,58 @@ def source_hn_show() -> list:
 
 
 # ============================================================================
-# SOURCE 4: ProductHunt
+# SOURCE 4: Seed DB / Axios Pro Rata RSS (replaces ProductHunt)
 # ============================================================================
-def source_producthunt() -> list:
-    """Pull recent ProductHunt launches via their public API."""
+def source_axios_prorata() -> list:
+    """Pull seed funding news from Axios Pro Rata — covers early-stage rounds."""
     candidates = []
-    try:
-        # ProductHunt requires an API key for full access; fall back to their public RSS
-        feed = feedparser.parse("https://www.producthunt.com/feed")
-        for entry in feed.entries[:40]:
-            title = entry.get("title", "") or ""
-            # Strip leading emoji or rank if present
-            name = title.split("—")[0].split("-")[0].strip()[:80]
-            if not name:
-                continue
-            candidates.append({
-                "name": name,
-                "website": entry.get("link", ""),
-                "description": entry.get("summary", "")[:500],
-                "industry": "",
-                "hq_city": "",
-                "hq_country": "United States",
-                "founded_date": str(datetime.now().year),
-                "headcount": 0,
-                "total_funding_usd": 0,
-                "last_funding_round": "pre-seed",
-                "last_funding_date": "",
-                "linkedin_url": "",
-                "_source": "ProductHunt",
-            })
-    except Exception as e:
-        print(f"[ProductHunt] Error: {e}")
-    print(f"[ProductHunt] {len(candidates)} candidates")
+    feeds = [
+        "https://www.axios.com/pro/health-tech-deals/rss",
+        "https://www.axios.com/pro/fintech-deals/rss",
+        "https://www.axios.com/feeds/feed.rss",
+    ]
+    funding_pattern = re.compile(
+        r"([A-Z][A-Za-z0-9.\- ]{2,40})\s+(?:raises?|secures?|closes?|lands?|bags?)\s+\$(\d+(?:\.\d+)?)\s*([MK])",
+        re.IGNORECASE,
+    )
+    seed_keywords = ["seed", "pre-seed", "series a", "early-stage", "early stage"]
+
+    for feed_url in feeds:
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:30]:
+                title = (entry.get("title", "") or "").strip()
+                summary = (entry.get("summary", "") or "").strip()
+                combined = f"{title} {summary}".lower()
+                if not any(k in combined for k in seed_keywords):
+                    continue
+                match = funding_pattern.search(title)
+                if not match:
+                    continue
+                name = match.group(1).strip()
+                amount = float(match.group(2))
+                unit = match.group(3).upper()
+                funding_usd = amount * (1_000_000 if unit == "M" else 1_000)
+                if funding_usd > 15_000_000:
+                    continue
+                candidates.append({
+                    "name": name[:80],
+                    "website": entry.get("link", ""),
+                    "description": summary[:500],
+                    "industry": "",
+                    "hq_city": "",
+                    "hq_country": "United States",
+                    "founded_date": "",
+                    "headcount": 0,
+                    "total_funding_usd": funding_usd,
+                    "last_funding_round": "seed",
+                    "last_funding_date": entry.get("published", ""),
+                    "linkedin_url": "",
+                    "_source": "Axios",
+                })
+        except Exception as e:
+            print(f"[Axios {feed_url}] Error: {e}")
+    print(f"[Axios Pro Rata] {len(candidates)} candidates")
     return candidates
 
 
@@ -228,9 +260,11 @@ def source_claude_research(ai_client) -> list:
     """Use Claude to surface recently-funded seed-stage companies in specific themes."""
     candidates = []
     themes = [
-        "seed-stage B2B SaaS companies that raised their seed round in the last 90 days",
-        "pre-seed infrastructure startups solving enterprise compliance problems",
-        "seed-stage AI tooling companies with US-based founders raised in last 60 days",
+        "seed-stage B2B SaaS companies that raised their seed round in the last 90 days solving compliance or regulatory problems",
+        "pre-seed infrastructure startups solving enterprise workflow problems created by AI adoption in the last 60 days",
+        "seed-stage healthcare AI companies with US-based founders that raised in the last 90 days",
+        "seed-stage fintech compliance or regtech startups that raised in the last 60 days",
+        "seed-stage cybersecurity or data privacy startups solving problems created by cloud adoption that raised recently",
     ]
     for theme in themes:
         prompt = f"""List up to 5 real, specific companies that match this description:
@@ -283,6 +317,11 @@ def source_rss_funding() -> list:
     feeds = [
         "https://techcrunch.com/category/startups/feed/",
         "https://news.crunchbase.com/feed/",
+        "https://techcrunch.com/tag/seed-funding/feed/",
+        "https://venturebeat.com/category/venture/feed/",
+        "https://www.geekwire.com/feed/",
+        "https://medcitynews.com/feed/",
+        "https://www.fiercehealthcare.com/rss/xml",
     ]
     funding_pattern = re.compile(
         r"([A-Z][A-Za-z0-9.\- ]{2,40})\s+(?:raises?|secures?|closes?|bags?)\s+\$(\d+(?:\.\d+)?)\s*([MK])",
@@ -408,7 +447,7 @@ def main():
     all_candidates.extend(source_crustdata_cache(sheet_client))
     all_candidates.extend(source_yc_algolia())
     all_candidates.extend(source_hn_show())
-    all_candidates.extend(source_producthunt())
+    all_candidates.extend(source_axios_prorata())
     all_candidates.extend(source_betalist())
     all_candidates.extend(source_claude_research(ai_client))
     all_candidates.extend(source_rss_funding())
