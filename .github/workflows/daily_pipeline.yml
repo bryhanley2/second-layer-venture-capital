@@ -26,13 +26,16 @@ jobs:
          pip install anthropic requests gspread google-auth feedparser
 
       - name: Run Second Layer Pipeline
-        env:
-          ANTHROPIC_API_KEY:            ${{ secrets.ANTHROPIC_API_KEY }}
-          EMAIL_SENDER:                 ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASSWORD:               ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_RECIPIENT:              ${{ secrets.EMAIL_RECIPIENT }}
-          GOOGLE_SERVICE_ACCOUNT_JSON:  ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GOOGLE_SHEET_ID:              ${{ secrets.GOOGLE_SHEET_ID }}
-          MIN_SCORE_PCT:                "65"
+      env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+  EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+  GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+  GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+  GMAIL_USER: ${{ secrets.EMAIL_SENDER }}
+  GMAIL_APP_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+  MIN_SCORE_PCT: "65"
         run: |
           python sourcer.py
