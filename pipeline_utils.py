@@ -41,7 +41,7 @@ FACTOR_WEIGHTS = {
 
 # ---------- Google Sheets client ----------
 def get_sheet_client():
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    creds_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
     if not creds_json:
         raise RuntimeError("GOOGLE_CREDENTIALS_JSON not set")
     creds_dict = json.loads(creds_json)
