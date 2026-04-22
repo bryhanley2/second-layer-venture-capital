@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install anthropic requests beautifulsoup4 google-auth google-auth-httplib2 cryptography
+         pip install anthropic requests gspread google-auth feedparser
 
       - name: Run Second Layer Pipeline
         env:
