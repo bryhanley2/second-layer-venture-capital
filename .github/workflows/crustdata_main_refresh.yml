@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests gspread google-auth
+          pip install requests gspread google-auth anthropic
       - name: Run Crustdata refresh
         env:
           CRUSTDATA_API_KEY: ${{ secrets.CRUSTDATA_API_KEY }}
