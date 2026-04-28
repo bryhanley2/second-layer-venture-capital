@@ -30,20 +30,23 @@ MAX_COMPANY_AGE_DAYS = 5 * 365    # 5 years
 def build_query() -> dict:
     """Broad seed-stage filter, US-focused."""
     return {
-        "conditions": [
-            {"column": "headcount", "type": "in_between",
-             "value": [MIN_HEADCOUNT, MAX_HEADCOUNT]},
-            {"column": "total_funding_usd", "type": "<=",
-             "value": MAX_TOTAL_FUNDING_USD},
-            {"column": "days_since_last_funding_round", "type": "<=",
-             "value": MAX_DAYS_SINCE_LAST_ROUND},
-            {"column": "hq_country", "type": "in",
-             "value": ["United States"]},
-            {"column": "days_since_founded", "type": "<=",
-             "value": MAX_COMPANY_AGE_DAYS},
-        ],
+        "filters": {
+            "op": "and",
+            "conditions": [
+                {"column": "headcount", "type": "in_between",
+                 "value": [MIN_HEADCOUNT, MAX_HEADCOUNT]},
+                {"column": "total_funding_usd", "type": "<=",
+                 "value": MAX_TOTAL_FUNDING_USD},
+                {"column": "days_since_last_funding_round", "type": "<=",
+                 "value": MAX_DAYS_SINCE_LAST_ROUND},
+                {"column": "hq_country", "type": "in",
+                 "value": ["United States"]},
+                {"column": "days_since_founded", "type": "<=",
+                 "value": MAX_COMPANY_AGE_DAYS},
+            ],
+        },
         "page": 1,
-        "per_page": 100,
+        "limit": 100,
     }
 
 
