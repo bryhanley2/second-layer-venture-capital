@@ -22,31 +22,46 @@ CACHE_TAB = "Crustdata Cache - Main"
 # Hard filter constants (enforced at Crustdata API level)
 MAX_TOTAL_FUNDING_USD = 15_000_000
 MIN_HEADCOUNT = 1
-MAX_HEADCOUNT = 30
+MAX_HEADCOUNT = 50
 MAX_DAYS_SINCE_LAST_ROUND = 730   # 24 months
 MAX_COMPANY_AGE_DAYS = 5 * 365    # 5 years
 
 
 def build_query() -> dict:
-    """Broad seed-stage filter, US-focused."""
+    """Broad seed-stage filter, US-focused. Uses current Crustdata field names."""
     return {
         "filters": {
             "op": "and",
             "conditions": [
-                {"column": "headcount", "type": "in_between",
-                 "value": [MIN_HEADCOUNT, MAX_HEADCOUNT]},
-                {"column": "total_funding_usd", "type": "<=",
-                 "value": MAX_TOTAL_FUNDING_USD},
-                {"column": "days_since_last_funding_round", "type": "<=",
-                 "value": MAX_DAYS_SINCE_LAST_ROUND},
-                {"column": "hq_country", "type": "in",
-                 "value": ["United States"]},
-                {"column": "days_since_founded", "type": "<=",
-                 "value": MAX_COMPANY_AGE_DAYS},
+                {
+                    "column": "headcount",
+                    "type": "in_between",
+                    "value": [MIN_HEADCOUNT, MAX_HEADCOUNT],
+                    "allow_null": False,
+                },
+                {
+                    "column": "total_funding_raised_usd",
+                    "type": "<=",
+                    "value": MAX_TOTAL_FUNDING_USD,
+                    "allow_null": True,
+                },
+                {
+                    "column": "days_since_last_fundraise",
+                    "type": "<=",
+                    "value": MAX_DAYS_SINCE_LAST_ROUND,
+                    "allow_null": False,
+                },
+                {
+                    "column": "largest_headcount_country",
+                    "type": "=",
+                    "value": "USA",
+                    "allow_null": False,
+                },
             ],
         },
-        "page": 1,
-        "limit": 100,
+        "offset": 0,
+        "count": 100,
+        "sorts": [],
     }
 
 
@@ -64,7 +79,8 @@ def call_crustdata(query: dict) -> list:
         print(f"Crustdata API error {response.status_code}: {response.text[:500]}")
         return []
     data = response.json()
-    companies = data.get("results", data.get("data", []))
+    # New API returns 'records', fallback to 'results' or 'data'
+    companies = data.get("records", data.get("results", data.get("data", [])))
     print(f"Returned {len(companies)} companies")
     return companies
 
@@ -80,18 +96,18 @@ def normalise(raw: dict) -> dict:
 
     return {
         "name": safe_get(raw, "company_name", default=safe_get(raw, "name")),
-        "website": safe_get(raw, "website", default=safe_get(raw, "domain")),
+        "website": safe_get(raw, "company_website_domain", default=safe_get(raw, "website", default=safe_get(raw, "domain"))),
         "hq_city": safe_get(raw, "hq_city", default=""),
-        "hq_country": safe_get(raw, "hq_country", default=""),
-        "founded_date": safe_get(raw, "founded_date", default=safe_get(raw, "year_founded")),
+        "hq_country": safe_get(raw, "largest_headcount_country", default=safe_get(raw, "hq_country", default="")),
+        "founded_date": safe_get(raw, "founded_date", default=safe_get(raw, "year_founded", default="")),
         "headcount": safe_get(raw, "headcount", default=0),
-        "total_funding_usd": safe_get(raw, "total_funding_usd", default=0),
-        "last_funding_round": safe_get(raw, "last_funding_round", default=""),
-        "last_funding_date": safe_get(raw, "last_funding_date", default=""),
-        "last_funding_amount_usd": safe_get(raw, "last_funding_amount_usd", default=0),
-        "industry": safe_get(raw, "industry", default=""),
+        "total_funding_usd": safe_get(raw, "total_funding_raised_usd", default=safe_get(raw, "total_funding_usd", default=0)),
+        "last_funding_round": safe_get(raw, "last_funding_round_type", default=safe_get(raw, "last_funding_round", default="")),
+        "last_funding_date": safe_get(raw, "last_funding_round_date", default=safe_get(raw, "last_funding_date", default="")),
+        "last_funding_amount_usd": safe_get(raw, "last_funding_round_amount", default=safe_get(raw, "last_funding_amount_usd", default=0)),
+        "industry": safe_get(raw, "company_type", default=safe_get(raw, "industry", default="")),
         "description": safe_get(raw, "short_description", default=safe_get(raw, "description", default="")),
-        "linkedin_url": safe_get(raw, "linkedin_url", default=""),
+        "linkedin_url": safe_get(raw, "linkedin_profile_url", default=safe_get(raw, "linkedin_url", default="")),
     }
 
 
@@ -125,11 +141,14 @@ def write_cache(companies: list):
     if rows:
         tab.append_rows(rows)
         print(f"Wrote {len(rows)} rows to '{CACHE_TAB}' tab")
+    else:
+        print("No rows to write.")
 
 
 def main():
     print(f"Main pipeline Crustdata refresh — {datetime.now(timezone.utc).isoformat()}")
     query = build_query()
+    print(f"Query: {json.dumps(query, indent=2)}")
     raw = call_crustdata(query)
     if not raw:
         print("No results, cache not updated. Exiting.")
