@@ -289,7 +289,13 @@ def ensure_tab(client, tab_name: str, headers: list = None, rows: int = 1000, co
     """Get or create a worksheet tab, optionally seeding headers on creation."""
     sheet = client.open_by_key(SHEET_ID)
     try:
-        return sheet.worksheet(tab_name)
+        tab = sheet.worksheet(tab_name)
+        # Write headers if row 1 is empty (e.g. tab was cleared but not deleted)
+        if headers:
+            first_row = tab.row_values(1)
+            if not first_row or first_row[0] == "":
+                tab.insert_row(headers, index=1)
+        return tab
     except gspread.WorksheetNotFound:
         tab = sheet.add_worksheet(title=tab_name, rows=rows, cols=cols)
         if headers:
