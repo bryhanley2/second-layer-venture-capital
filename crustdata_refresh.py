@@ -31,11 +31,11 @@ def build_query() -> dict:
         "filters": {
             "op": "and",
             "conditions": [
-                {"column": "headcount", "type": ">=", "value": MIN_HEADCOUNT, "allow_null": False},
-                {"column": "headcount", "type": "<=", "value": MAX_HEADCOUNT, "allow_null": False},
-                {"column": "total_funding_raised_usd", "type": "<=", "value": MAX_TOTAL_FUNDING_USD, "allow_null": True},
-                {"column": "days_since_last_fundraise", "type": "<=", "value": MAX_DAYS_SINCE_LAST_ROUND, "allow_null": False},
-                {"column": "largest_headcount_country", "type": "=", "value": "USA", "allow_null": False},
+                {"column": "employee_count", "type": ">=", "value": MIN_HEADCOUNT, "allow_null": False},
+                {"column": "employee_count", "type": "<=", "value": MAX_HEADCOUNT, "allow_null": False},
+                {"column": "total_funding_usd", "type": "<=", "value": MAX_TOTAL_FUNDING_USD, "allow_null": True},
+                {"column": "last_funding_date", "type": ">=", "value": "2023-01-01", "allow_null": False},
+                {"column": "hq_country", "type": "=", "value": "United States", "allow_null": False},
             ],
         },
         "offset": 0,
