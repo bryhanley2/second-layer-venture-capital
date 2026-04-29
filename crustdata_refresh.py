@@ -4,7 +4,7 @@ Crustdata Main Pipeline Refresh
 Runs weekly to pull broad seed-stage candidates into the main pipeline cache.
 Writes to "Crustdata Cache - Main" tab.
 
-Uses the current Crustdata in-database company discovery endpoint.
+Uses Crustdata's realtime company search API (correct format per docs).
 """
 
 import os
@@ -15,46 +15,28 @@ from datetime import datetime, timezone
 from pipeline_utils import get_sheet_client, SHEET_ID
 import gspread
 
-# Current endpoint per Crustdata docs (replaces deprecated /screener/screen/)
-CRUSTDATA_ENDPOINT = "https://api.crustdata.com/screener/companydb/search/"
+CRUSTDATA_ENDPOINT = "https://api.crustdata.com/screener/company/search"
 CACHE_TAB = "Crustdata Cache - Main"
 
-MAX_TOTAL_FUNDING_USD = 15_000_000
-MIN_HEADCOUNT = 1
-MAX_HEADCOUNT = 50
-MAX_DAYS_SINCE_LAST_ROUND = 730
-MAX_COMPANY_AGE_DAYS = 5 * 365
 
-
-def build_query() -> dict:
+def build_query(page=1) -> dict:
+    """
+    Uses the correct Crustdata filter format:
+    filter_type, type, value — per official docs.
+    """
     return {
-        "filters": {
-            "op": "and",
-            "conditions": [
-                {"column": "employee_count", "type": ">=", "value": MIN_HEADCOUNT, "allow_null": False},
-                {"column": "employee_count", "type": "<=", "value": MAX_HEADCOUNT, "allow_null": False},
-                {"column": "total_funding_usd", "type": "<=", "value": MAX_TOTAL_FUNDING_USD, "allow_null": True},
-                {"column": "last_funding_date", "type": ">=", "value": "2023-01-01", "allow_null": False},
-                {"column": "hq_country", "type": "=", "value": "United States", "allow_null": False},
-            ],
-        },
-        "offset": 0,
-        "count": 100,
-        "sorts": [],
+        "filters": [
+            {"filter_type": "REGION", "type": "in", "value": ["United States"]},
+            {"filter_type": "COMPANY_HEADCOUNT", "type": "in", "value": ["1-10", "11-50"]},
+        ],
+        "page": page,
     }
 
 
-def call_crustdata(query: dict) -> list:
+def call_crustdata() -> list:
     api_key = os.environ.get("CRUSTDATA_API_KEY")
     if not api_key:
         raise RuntimeError("CRUSTDATA_API_KEY not set")
-
-    # Try primary endpoint first, then fall back
-    endpoints = [
-        "https://api.crustdata.com/screener/companydb/search/",
-        "https://api.crustdata.com/screener/screen/",
-        "https://api.crustdata.com/data_lab/company_discovery/",
-    ]
 
     headers = {
         "Authorization": f"Token {api_key}",
@@ -62,28 +44,35 @@ def call_crustdata(query: dict) -> list:
         "Accept": "application/json",
     }
 
-    for endpoint in endpoints:
-        print(f"Trying endpoint: {endpoint}")
-        try:
-            response = requests.post(endpoint, headers=headers, json=query, timeout=60)
-            print(f"Status: {response.status_code}")
-            if response.status_code == 200:
-                data = response.json()
-                companies = data.get("records", data.get("results", data.get("companies", data.get("data", []))))
-                print(f"Returned {len(companies)} companies from {endpoint}")
-                return companies
-            elif response.status_code == 404:
-                print(f"404 deprecated, trying next endpoint...")
-                continue
-            else:
-                print(f"Error {response.status_code}: {response.text[:300]}")
-                continue
-        except Exception as e:
-            print(f"Exception on {endpoint}: {e}")
-            continue
+    all_companies = []
+    page = 1
+    max_pages = 3  # Stay within credit budget
 
-    print("All endpoints failed.")
-    return []
+    while page <= max_pages:
+        payload = build_query(page)
+        print(f"Fetching page {page}...")
+        try:
+            response = requests.post(
+                CRUSTDATA_ENDPOINT, headers=headers, json=payload, timeout=60
+            )
+            print(f"Status: {response.status_code}")
+            if response.status_code != 200:
+                print(f"Error: {response.text[:500]}")
+                break
+            data = response.json()
+            # Response key may be 'companies' or 'records'
+            companies = data.get("companies", data.get("records", []))
+            print(f"Page {page}: {len(companies)} companies")
+            if not companies:
+                break
+            all_companies.extend(companies)
+            page += 1
+        except Exception as e:
+            print(f"Exception on page {page}: {e}")
+            break
+
+    print(f"Total fetched: {len(all_companies)} companies")
+    return all_companies
 
 
 def normalise(raw: dict) -> dict:
@@ -97,19 +86,19 @@ def normalise(raw: dict) -> dict:
         return d
 
     return {
-        "name": g("company_name", default=g("name")),
-        "website": g("company_website_domain", default=g("website", default=g("domain"))),
+        "name": g("name", default=g("company_name", default="")),
+        "website": g("website", default=g("company_website_domain", default=g("domain", default=""))),
         "hq_city": g("hq_city", default=""),
-        "hq_country": g("largest_headcount_country", default=g("hq_country", default="")),
+        "hq_country": g("hq_country", default=g("largest_headcount_country", default="")),
         "founded_date": str(g("founded_date", default=g("year_founded", default=""))),
-        "headcount": g("headcount", default=0),
-        "total_funding_usd": g("total_funding_raised_usd", default=g("total_funding_usd", default=0)),
-        "last_funding_round": g("last_funding_round_type", default=g("last_funding_round", default="")),
-        "last_funding_date": str(g("last_funding_round_date", default=g("last_funding_date", default=""))),
-        "last_funding_amount_usd": g("last_funding_round_amount", default=0),
-        "industry": g("company_type", default=g("industry", default="")),
-        "description": str(g("short_description", default=g("description", default="")))[:500],
-        "linkedin_url": g("linkedin_profile_url", default=g("linkedin_url", default="")),
+        "headcount": g("headcount", default=g("employee_count", default=0)),
+        "total_funding_usd": g("total_funding_usd", default=g("total_funding_raised_usd", default=0)),
+        "last_funding_round": g("last_funding_round", default=g("last_funding_round_type", default="")),
+        "last_funding_date": str(g("last_funding_date", default=g("last_funding_round_date", default=""))),
+        "last_funding_amount_usd": g("last_funding_amount_usd", default=g("last_funding_round_amount", default=0)),
+        "industry": g("industry", default=g("company_type", default="")),
+        "description": str(g("description", default=g("short_description", default="")))[:500],
+        "linkedin_url": g("linkedin_url", default=g("linkedin_profile_url", default="")),
     }
 
 
@@ -148,9 +137,7 @@ def write_cache(companies: list):
 
 def main():
     print(f"Crustdata refresh — {datetime.now(timezone.utc).isoformat()}")
-    query = build_query()
-    print(f"Query: {json.dumps(query, indent=2)}")
-    raw = call_crustdata(query)
+    raw = call_crustdata()
     if not raw:
         print("No results. Exiting.")
         return
