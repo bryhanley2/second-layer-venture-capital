@@ -17,25 +17,28 @@ FAIL = "❌"
 # ─── YC Algolia ───────────────────────────────────────────────────────────────
 def test_yc_algolia():
     print("\n=== YC (via yc-oss public API) ===")
-    # yc-oss/api serves batch JSON files publicly — no API key needed
-    base = "https://yc-oss.github.io/api/batches"
-    batches = ["w25", "s25", "w26", "f25"]
-    total = 0
-    for batch in batches:
-        try:
-            url = f"{base}/{batch}.json"
-            r = requests.get(url, timeout=20)
-            if r.status_code == 200:
-                companies = r.json()
-                total += len(companies)
-                print(f"{PASS} YC {batch.upper()}: {len(companies)} companies")
-                for c in companies[:2]:
-                    print(f"   - {c.get('name')} | {c.get('one_liner','')[:60]}")
-            else:
-                print(f"{FAIL} YC {batch.upper()}: Status {r.status_code}")
-        except Exception as e:
-            print(f"{FAIL} YC {batch.upper()}: {e}")
-    print(f"YC Total: {total} candidates")
+    target_batches = {"W25", "S25", "W26", "F25", "X25"}
+    try:
+        url = "https://yc-oss.github.io/api/companies/all.json"
+        r = requests.get(url, timeout=30)
+        print(f"Status: {r.status_code}, Size: {len(r.content)} bytes")
+        if r.status_code == 200:
+            all_companies = r.json()
+            print(f"Total companies in all.json: {len(all_companies)}")
+            matches = [c for c in all_companies if c.get("batch") in target_batches]
+            print(f"{PASS} Matching recent batches {target_batches}: {len(matches)} companies")
+            # Show batch breakdown
+            from collections import Counter
+            counts = Counter(c.get("batch") for c in matches)
+            for batch, count in sorted(counts.items()):
+                print(f"   {batch}: {count} companies")
+            # Sample
+            for c in matches[:3]:
+                print(f"   - {c.get('name')} | {c.get('batch')} | {c.get('one_liner','')[:60]}")
+        else:
+            print(f"{FAIL} Status {r.status_code}")
+    except Exception as e:
+        print(f"{FAIL} Error: {e}")
 
 
 # ─── RSS Feeds ────────────────────────────────────────────────────────────────
