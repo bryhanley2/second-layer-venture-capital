@@ -16,35 +16,25 @@ FAIL = "❌"
 
 # ─── YC Algolia ───────────────────────────────────────────────────────────────
 def test_yc_algolia():
-    print("\n=== YC Algolia ===")
-    url = "https://45bwzj1sgc-dsn.algolia.net/1/indexes/*/queries"
-    headers = {
-        "x-algolia-agent": "Algolia for JavaScript (4.14.3); Browser (lite)",
-        "x-algolia-api-key": "9f3b9a7fd6e66c93f2bec4e42e3eb94d",
-        "x-algolia-application-id": "45BWZJ1SGC",
-        "Content-Type": "application/json",
-    }
+    print("\n=== YC (via yc-oss public API) ===")
+    # yc-oss/api serves batch JSON files publicly — no API key needed
+    base = "https://yc-oss.github.io/api/batches"
+    batches = ["w25", "s25", "w26", "f25"]
     total = 0
-    for batch in ["W25", "S25", "W26", "F25"]:
+    for batch in batches:
         try:
-            params = urllib.parse.urlencode({
-                "query": "",
-                "facetFilters": f'[["batch:{batch}"]]',
-                "hitsPerPage": 10,
-                "attributesToRetrieve": "name,one_liner,website,batch",
-            })
-            payload = {"requests": [{"indexName": "YCCompany_production", "params": params}]}
-            r = requests.post(url, json=payload, headers=headers, timeout=20)
+            url = f"{base}/{batch}.json"
+            r = requests.get(url, timeout=20)
             if r.status_code == 200:
-                hits = r.json().get("results", [{}])[0].get("hits", [])
-                total += len(hits)
-                print(f"{PASS} YC {batch}: {len(hits)} hits")
-                for h in hits[:2]:
-                    print(f"   - {h.get('name')} | {h.get('one_liner','')[:60]}")
+                companies = r.json()
+                total += len(companies)
+                print(f"{PASS} YC {batch.upper()}: {len(companies)} companies")
+                for c in companies[:2]:
+                    print(f"   - {c.get('name')} | {c.get('one_liner','')[:60]}")
             else:
-                print(f"{FAIL} YC {batch}: Status {r.status_code} — {r.text[:150]}")
+                print(f"{FAIL} YC {batch.upper()}: Status {r.status_code}")
         except Exception as e:
-            print(f"{FAIL} YC {batch}: {e}")
+            print(f"{FAIL} YC {batch.upper()}: {e}")
     print(f"YC Total: {total} candidates")
 
 
@@ -55,13 +45,9 @@ def test_rss_feeds():
         ("TechCrunch Seed", "https://techcrunch.com/tag/seed-funding/feed/"),
         ("TechCrunch Startups", "https://techcrunch.com/category/startups/feed/"),
         ("Crunchbase News", "https://news.crunchbase.com/feed/"),
-        ("Fortune Term Sheet", "https://fortune.com/feed/fortune-termsheet/"),
-        ("VentureBeat", "https://venturebeat.com/category/venture/feed/"),
         ("GeekWire", "https://www.geekwire.com/feed/"),
         ("MedCityNews", "https://medcitynews.com/feed/"),
         ("Fierce Healthcare", "https://www.fiercehealthcare.com/rss/xml"),
-        ("BusinessWire", "https://www.businesswire.com/rss/home/?rss=G7"),
-        ("vcnewsdaily", "https://vcnewsdaily.com/feed/"),
     ]
 
     funding_pattern = re.compile(
