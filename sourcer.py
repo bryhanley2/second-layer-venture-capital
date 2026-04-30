@@ -79,54 +79,40 @@ def source_crustdata_cache(client) -> list:
 # SOURCE 2: YC Algolia
 # ============================================================================
 def source_yc_algolia() -> list:
-    """Pull recent YC batches via YC's public Algolia search index."""
+    """Pull recent YC batches via yc-oss public API — no key needed."""
     candidates = []
-    batches = ["W25", "S25", "W26", "F25"]
-    # Public Algolia credentials used by ycombinator.com — works without auth
-    url = "https://45bwzj1sgc-dsn.algolia.net/1/indexes/*/queries"
-    headers = {
-        "x-algolia-agent": "Algolia for JavaScript (4.14.3); Browser (lite)",
-        "x-algolia-api-key": "9f3b9a7fd6e66c93f2bec4e42e3eb94d",
-        "x-algolia-application-id": "45BWZJ1SGC",
-        "Content-Type": "application/json",
-    }
-    for batch in batches:
-        try:
-            import urllib.parse
-            params = urllib.parse.urlencode({
-                "query": "",
-                "facetFilters": f'[["batch:{batch}"]]',
-                "hitsPerPage": 100,
-                "attributesToRetrieve": "name,one_liner,long_description,website,industry,city,year_founded,team_size,linkedin_url",
+    target_batches = {"W25", "S25", "W26", "F25", "X25"}
+    try:
+        url = "https://yc-oss.github.io/api/companies/all.json"
+        r = requests.get(url, timeout=30)
+        if r.status_code != 200:
+            print(f"[YC Algolia] Status {r.status_code}")
+            return candidates
+        all_companies = r.json()
+        for c in all_companies:
+            batch = c.get("batch", "")
+            if batch not in target_batches:
+                continue
+            name = c.get("name", "").strip()
+            if not name:
+                continue
+            candidates.append({
+                "name": name,
+                "website": c.get("url", c.get("website", "")),
+                "description": c.get("long_description", c.get("one_liner", "")),
+                "industry": c.get("industry", ""),
+                "hq_city": c.get("city", ""),
+                "hq_country": "United States",
+                "founded_date": str(c.get("year_founded", datetime.now().year)),
+                "headcount": c.get("team_size", 0),
+                "total_funding_usd": 500000,
+                "last_funding_round": "seed",
+                "last_funding_date": "",
+                "linkedin_url": c.get("linkedin_url", ""),
+                "_source": f"YC {batch}",
             })
-            payload = {"requests": [{"indexName": "YCCompany_production", "params": params}]}
-            r = requests.post(url, json=payload, headers=headers, timeout=20)
-            if r.status_code == 200:
-                hits = r.json().get("results", [{}])[0].get("hits", [])
-                for c in hits:
-                    name = c.get("name", "").strip()
-                    if not name:
-                        continue
-                    candidates.append({
-                        "name": name,
-                        "website": c.get("website", ""),
-                        "description": c.get("long_description", c.get("one_liner", "")),
-                        "industry": c.get("industry", ""),
-                        "hq_city": c.get("city", ""),
-                        "hq_country": "United States",
-                        "founded_date": str(c.get("year_founded", datetime.now().year)),
-                        "headcount": c.get("team_size", 0),
-                        "total_funding_usd": 500000,  # YC standard check
-                        "last_funding_round": "seed",
-                        "last_funding_date": "",
-                        "linkedin_url": c.get("linkedin_url", ""),
-                        "_source": f"YC {batch}",
-                    })
-                print(f"[YC {batch}] {len(hits)} hits")
-            else:
-                print(f"[YC {batch}] Status {r.status_code}: {r.text[:200]}")
-        except Exception as e:
-            print(f"[YC {batch}] Error: {e}")
+    except Exception as e:
+        print(f"[YC Algolia] Error: {e}")
     print(f"[YC Algolia] {len(candidates)} candidates total")
     return candidates
 
@@ -324,18 +310,12 @@ def source_rss_funding() -> list:
     """Parse funding-focused RSS feeds for recent seed rounds."""
     candidates = []
     feeds = [
-        # Seed-specific
         "https://techcrunch.com/tag/seed-funding/feed/",
         "https://techcrunch.com/category/startups/feed/",
         "https://news.crunchbase.com/feed/",
-        # Tier 1 additions — curated early-stage deal coverage
-        "https://fortune.com/feed/fortune-termsheet/",
-        "https://vcnewsdaily.com/feed/",
-        "https://www.businesswire.com/rss/home/?rss=G7",  # Funding announcements
-        # Vertical
         "https://venturebeat.com/category/venture/feed/",
-        "https://medcitynews.com/feed/",
         "https://www.geekwire.com/feed/",
+        "https://medcitynews.com/feed/",
         "https://www.fiercehealthcare.com/rss/xml",
     ]
     funding_pattern = re.compile(
