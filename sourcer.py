@@ -79,41 +79,46 @@ def source_crustdata_cache(client) -> list:
 # SOURCE 2: YC Algolia
 # ============================================================================
 def source_yc_algolia() -> list:
-    """Pull recent YC batches via yc-oss public API — no key needed."""
+    """Pull recent YC batches via YC directory."""
     candidates = []
-    target_batches = {"W25", "S25", "W26", "F25", "X25"}
-    try:
-        url = "https://yc-oss.github.io/api/companies/all.json"
-        r = requests.get(url, timeout=30)
-        if r.status_code != 200:
-            print(f"[YC Algolia] Status {r.status_code}")
-            return candidates
-        all_companies = r.json()
-        for c in all_companies:
-            batch = c.get("batch", "")
-            if batch not in target_batches:
-                continue
-            name = c.get("name", "").strip()
-            if not name:
-                continue
-            candidates.append({
-                "name": name,
-                "website": c.get("url", c.get("website", "")),
-                "description": c.get("long_description", c.get("one_liner", "")),
-                "industry": c.get("industry", ""),
-                "hq_city": c.get("city", ""),
-                "hq_country": "United States",
-                "founded_date": str(c.get("year_founded", datetime.now().year)),
-                "headcount": c.get("team_size", 0),
-                "total_funding_usd": 500000,
-                "last_funding_round": "seed",
-                "last_funding_date": "",
-                "linkedin_url": c.get("linkedin_url", ""),
-                "_source": f"YC {batch}",
-            })
-    except Exception as e:
-        print(f"[YC Algolia] Error: {e}")
-    print(f"[YC Algolia] {len(candidates)} candidates total")
+    batches = ["W25", "S25", "W26", "F25"]
+    for batch in batches:
+        try:
+            # Try the Algolia search API directly
+            url = "https://45bwzj1sgc-dsn.algolia.net/1/indexes/*/queries"
+            headers = {
+                "x-algolia-agent": "Algolia for JavaScript (4.14.3); Browser (lite)",
+                "x-algolia-api-key": "9f3b9a7fd6e66c93f2bec4e42e3eb94d",
+                "x-algolia-application-id": "45BWZJ1SGC",
+            }
+            payload = {
+                "requests": [{
+                    "indexName": "YCCompany_production",
+                    "params": f"query=&facetFilters=%5B%5B%22batch%3A{batch}%22%5D%5D&hitsPerPage=50"
+                }]
+            }
+            r = requests.post(url, json=payload, headers=headers, timeout=20)
+            if r.status_code == 200:
+                hits = r.json().get("results", [{}])[0].get("hits", [])
+                for c in hits:
+                    candidates.append({
+                        "name": c.get("name", ""),
+                        "website": c.get("website", ""),
+                        "description": c.get("long_description", c.get("one_liner", "")),
+                        "industry": c.get("industry", ""),
+                        "hq_city": c.get("city", ""),
+                        "hq_country": "United States",
+                        "founded_date": str(c.get("year_founded", datetime.now().year)),
+                        "headcount": c.get("team_size", 0),
+                        "total_funding_usd": 0,
+                        "last_funding_round": "seed",
+                        "last_funding_date": "",
+                        "linkedin_url": c.get("linkedin_url", ""),
+                        "_source": f"YC {batch}",
+                    })
+        except Exception as e:
+            print(f"[YC {batch}] Error: {e}")
+    print(f"[YC Algolia] {len(candidates)} candidates")
     return candidates
 
 
@@ -310,33 +315,30 @@ def source_rss_funding() -> list:
     """Parse funding-focused RSS feeds for recent seed rounds."""
     candidates = []
     feeds = [
-        "https://techcrunch.com/tag/seed-funding/feed/",
         "https://techcrunch.com/category/startups/feed/",
         "https://news.crunchbase.com/feed/",
+        "https://techcrunch.com/tag/seed-funding/feed/",
         "https://venturebeat.com/category/venture/feed/",
         "https://www.geekwire.com/feed/",
         "https://medcitynews.com/feed/",
         "https://www.fiercehealthcare.com/rss/xml",
     ]
     funding_pattern = re.compile(
-        r"([A-Z][A-Za-z0-9.\- ]{2,40})\s+(?:raises?|secures?|closes?|lands?|bags?|announces?)\s+\$(\d+(?:\.\d+)?)\s*([MK])",
+        r"([A-Z][A-Za-z0-9.\- ]{2,40})\s+(?:raises?|secures?|closes?|bags?)\s+\$(\d+(?:\.\d+)?)\s*([MK])",
         re.IGNORECASE,
     )
-    seed_keywords = ["seed", "pre-seed", "preseed", "series a", "early-stage", "early stage"]
+    seed_keywords = ["seed", "pre-seed", "series a"]
 
     for feed_url in feeds:
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:40]:
+            for entry in feed.entries[:30]:
                 title = (entry.get("title", "") or "").strip()
                 summary = (entry.get("summary", "") or "").strip()
                 combined = f"{title} {summary}"
                 if not any(k in combined.lower() for k in seed_keywords):
                     continue
                 match = funding_pattern.search(title)
-                if not match:
-                    # Try summary if title didn't match
-                    match = funding_pattern.search(summary)
                 if not match:
                     continue
                 name = match.group(1).strip()
@@ -453,7 +455,44 @@ def main():
 
     print(f"\nTotal raw candidates: {len(all_candidates)}")
 
-    # Step 2: Dedup
+    # Step 1b: Verify funding for Crustdata candidates with missing ($0) funding data.
+    # Crustdata sometimes returns null total_funding_usd — we use Claude to check
+    # before letting them through the gate, to avoid well-funded companies slipping through.
+    print("\nSTEP 1b: Verifying zero-funding Crustdata candidates")
+    print("-" * 60)
+    crustdata_zero = [c for c in all_candidates if c.get("_source") == "Crustdata" and safe_float(c.get("total_funding_usd", 0)) == 0]
+    if crustdata_zero:
+        print(f"Found {len(crustdata_zero)} Crustdata candidates with $0 funding — verifying with Claude...")
+        names = [c["name"] for c in crustdata_zero]
+        verify_prompt = f"""For each company below, return its best-known total funding raised (USD) and latest funding round stage.
+If you are not confident about a company, return null for both fields.
+
+Companies: {json.dumps(names)}
+
+Return ONLY a JSON object mapping company name to {{"total_funding_usd": NUMBER_OR_NULL, "stage": "STRING_OR_NULL"}}.
+No preamble, no explanation."""
+        try:
+            resp = ai_client.messages.create(
+                model="claude-opus-4-7",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": verify_prompt}],
+            )
+            verified = json.loads(resp.content[0].text.strip())
+            updated = 0
+            for c in all_candidates:
+                if c.get("_source") == "Crustdata" and safe_float(c.get("total_funding_usd", 0)) == 0:
+                    info = verified.get(c["name"], {})
+                    if info:
+                        if info.get("total_funding_usd") is not None:
+                            c["total_funding_usd"] = info["total_funding_usd"]
+                            updated += 1
+                        if info.get("stage") and not c.get("last_funding_round"):
+                            c["last_funding_round"] = info["stage"]
+            print(f"Updated funding data for {updated} Crustdata candidates")
+        except Exception as e:
+            print(f"[Funding verification] Error: {e} — proceeding with original data")
+    else:
+        print("No zero-funding Crustdata candidates — skipping verification")
     existing = read_existing_names(sheet_client, PIPELINE_TAB)
     all_candidates = deduplicate(all_candidates, existing)
     print(f"After dedup against existing pipeline: {len(all_candidates)}")
