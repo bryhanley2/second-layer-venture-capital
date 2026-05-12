@@ -94,8 +94,11 @@ def passes_stage_gate(candidate: dict):
     stage = str(candidate.get("last_funding_round", "") or candidate.get("stage", "")).strip().lower()
     if not stage or stage in {"unknown", "none"}:
         funding = safe_float(candidate.get("total_funding_usd", 0))
-        if funding <= 3_000_000:
-            return True, "accepted (missing stage, low funding implies pre-seed)"
+        if 0 < funding <= 3_000_000:
+            return True, f"accepted (missing stage, funding ${funding:,.0f} implies pre-seed)"
+        if funding == 0:
+            # Zero could mean no data — pass with caution but funding gate will validate further
+            return True, "accepted (missing stage and funding data — funding gate will validate)"
         return False, f"stage missing, funding ${funding:,.0f} too high to assume pre-seed"
     for allowed in ALLOWED_STAGES:
         if allowed in stage:
@@ -105,6 +108,13 @@ def passes_stage_gate(candidate: dict):
 
 def passes_funding_gate(candidate: dict):
     total = safe_float(candidate.get("total_funding_usd", 0))
+    # If funding is 0 or missing, only pass if stage is explicitly pre-seed/seed
+    # to avoid letting well-funded companies through with blank Crustdata fields.
+    if total == 0:
+        stage = str(candidate.get("last_funding_round", "") or candidate.get("stage", "")).strip().lower()
+        if stage in {"pre-seed", "preseed", "seed", "angel", "grant", "accelerator", ""}:
+            return True, "funding $0 (missing data) — stage suggests pre-seed, passing with caution"
+        return False, f"funding $0 (missing data) and stage '{stage}' not pre-seed — likely data gap, rejecting"
     if total > MAX_TOTAL_FUNDING:
         return False, f"total funding ${total:,.0f} exceeds ${MAX_TOTAL_FUNDING:,.0f} cap"
     return True, f"funding ${total:,.0f} within cap"
@@ -213,7 +223,8 @@ Format EXACTLY:
 7:N
 SUMMARY:one-sentence overall
 STRENGTHS:primary strength (<=25 words)
-RISKS:primary risk (<=25 words)"""
+RISKS:primary risk (<=25 words)
+FOUNDERS:Founder name(s), title(s), and prior background in <=40 words"""
 
     try:
         response = ai_client.messages.create(
@@ -223,7 +234,7 @@ RISKS:primary risk (<=25 words)"""
         )
         text = response.content[0].text.strip()
         scores = {}
-        meta = {"summary": "", "strengths": "", "risks": ""}
+        meta = {"summary": "", "strengths": "", "risks": "", "founders": ""}
 
         for line in text.split("\n"):
             line = line.strip()
@@ -244,6 +255,8 @@ RISKS:primary risk (<=25 words)"""
                 meta["strengths"] = val
             elif key.upper() == "RISKS":
                 meta["risks"] = val
+            elif key.upper() == "FOUNDERS":
+                meta["founders"] = val
 
         weighted = 0.0
         for factor, weight in FACTOR_WEIGHTS.items():
@@ -256,10 +269,11 @@ RISKS:primary risk (<=25 words)"""
             "summary": meta["summary"],
             "strengths": meta["strengths"],
             "risks": meta["risks"],
+            "founders": meta["founders"],
         }
     except Exception as e:
         print(f"    Scoring error for {candidate.get('name')}: {e}")
-        return {"scores": {}, "weighted_pct": 0, "summary": "", "strengths": "", "risks": f"Error: {e}"}
+        return {"scores": {}, "weighted_pct": 0, "summary": "", "strengths": "", "risks": f"Error: {e}", "founders": ""}
 
 
 def decision_from_score(pct: float) -> str:
@@ -278,6 +292,7 @@ def decision_from_score(pct: float) -> str:
 PIPELINE_HEADERS = [
     "Date", "Company", "Stage", "Total Raised", "Vertical", "Source",
     "Second Layer Logic", "Description", "Passed Gates",
+    "Founders",
     "1A_FMF", "1B_Tech", "1C_Commit", "2A_PMF", "3A_TAM", "3B_Timing",
     "5_TrxQl", "6_CapEff", "7_Investor",
     "Weighted %", "Decision", "Summary", "Strengths", "Risks",
@@ -289,13 +304,7 @@ def ensure_tab(client, tab_name: str, headers: list = None, rows: int = 1000, co
     """Get or create a worksheet tab, optionally seeding headers on creation."""
     sheet = client.open_by_key(SHEET_ID)
     try:
-        tab = sheet.worksheet(tab_name)
-        # Write headers if row 1 is empty (e.g. tab was cleared but not deleted)
-        if headers:
-            first_row = tab.row_values(1)
-            if not first_row or first_row[0] == "":
-                tab.insert_row(headers, index=1)
-        return tab
+        return sheet.worksheet(tab_name)
     except gspread.WorksheetNotFound:
         tab = sheet.add_worksheet(title=tab_name, rows=rows, cols=cols)
         if headers:
@@ -332,6 +341,7 @@ def write_scored_candidates(client, tab_name: str, scored: list, vertical_label:
             c.get("sl_reason", ""),
             str(cand.get("description", ""))[:400],
             "Yes",
+            c.get("founders", ""),
             s.get("1A", ""), s.get("1B", ""), s.get("1C", ""),
             s.get("2A", ""), s.get("3A", ""), s.get("3B", ""),
             s.get("5", ""), s.get("6", ""), s.get("7", ""),
