@@ -260,11 +260,15 @@ def source_claude_research(ai_client) -> list:
     """Use Claude to surface recently-funded seed-stage companies in specific themes."""
     candidates = []
     themes = [
-        "seed-stage B2B SaaS companies that raised their seed round in the last 90 days solving compliance or regulatory problems",
-        "pre-seed infrastructure startups solving enterprise workflow problems created by AI adoption in the last 60 days",
+        # Risk track (3b): solutions that mitigate problems AI adoption created
+        "seed-stage AI security, red-teaming, or deepfake detection startups that raised in the last 90 days",
+        "seed-stage startups solving compliance, governance, or legal problems created by enterprise AI adoption that raised recently",
+        "seed-stage workforce reskilling or AI-augmented professional services startups that raised in the last 90 days",
+        # Opportunity track (3a): solutions that supplement growth AI adoption enabled
+        "pre-seed or seed AI agent infrastructure startups (authentication, payments, orchestration, tool-calling) that raised in the last 60 days",
+        "seed-stage data center efficiency, cooling, or AI compute infrastructure startups that raised recently",
         "seed-stage healthcare AI companies with US-based founders that raised in the last 90 days",
         "seed-stage fintech compliance or regtech startups that raised in the last 60 days",
-        "seed-stage cybersecurity or data privacy startups solving problems created by cloud adoption that raised recently",
     ]
     for theme in themes:
         prompt = f"""List up to 5 real, specific companies that match this description:
@@ -369,6 +373,142 @@ def source_rss_funding() -> list:
 
 
 # ============================================================================
+# SOURCE 9: SBIR/STTR Awards (pre-VC government grant signal)
+# ============================================================================
+def source_sbir() -> list:
+    """
+    Recent SBIR/STTR Phase I awards — non-dilutive government grants to
+    deep-tech startups. Companies appear here BEFORE raising venture capital,
+    making this the earliest available institutional signal. Free API, no key.
+    """
+    candidates = []
+    try:
+        url = "https://api.www.sbir.gov/public/api/awards?agency=&year=2026&rows=50&format=json"
+        resp = requests.get(url, timeout=30)
+        if resp.status_code != 200:
+            print(f"[SBIR] HTTP {resp.status_code} — skipping")
+            return []
+        awards = resp.json() if isinstance(resp.json(), list) else resp.json().get("results", [])
+        seen = set()
+        for a in awards[:50]:
+            name = str(a.get("firm", "") or a.get("company_name", "")).strip()[:80]
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            abstract = str(a.get("abstract", "") or a.get("award_title", ""))[:500]
+            # Keyword filter: only AI-second-layer-relevant awards
+            blob = f"{name} {abstract}".lower()
+            if not any(k in blob for k in ["ai", "machine learning", "artificial intelligence",
+                                            "autonom", "data", "cyber", "energy", "grid",
+                                            "health", "compliance", "security"]):
+                continue
+            candidates.append({
+                "name": name,
+                "website": str(a.get("company_url", "") or "")[:200],
+                "description": abstract,
+                "industry": str(a.get("agency", "SBIR"))[:80],
+                "hq_city": str(a.get("city", "") or ""),
+                "hq_country": "United States",
+                "founded_date": "",
+                "headcount": int(a.get("number_employees", 0) or 0),
+                "total_funding_usd": safe_float(a.get("award_amount", 0)),
+                "last_funding_round": "grant",
+                "last_funding_date": str(a.get("proposal_award_date", "") or ""),
+                "linkedin_url": "",
+                "_source": "SBIR/STTR",
+            })
+    except Exception as e:
+        print(f"[SBIR] Error: {e}")
+    print(f"[SBIR/STTR] {len(candidates)} candidates")
+    return candidates
+
+
+# ============================================================================
+# SOURCE 10: Hugging Face Trending (pre-funding AI startup signal)
+# ============================================================================
+def source_huggingface() -> list:
+    """
+    Trending models on Hugging Face. AI startups publish models months before
+    announcing funding — org download velocity predates every funding database.
+    Free API, no auth required for public endpoints.
+    """
+    candidates = []
+    try:
+        url = "https://huggingface.co/api/models?sort=trendingScore&limit=40&full=false"
+        resp = requests.get(url, timeout=30)
+        if resp.status_code != 200:
+            print(f"[HuggingFace] HTTP {resp.status_code} — skipping")
+            return []
+        models = resp.json()
+        # Orgs to skip: big labs and established companies (not seed candidates)
+        SKIP_ORGS = {"meta-llama", "google", "openai", "microsoft", "mistralai", "qwen",
+                     "deepseek-ai", "anthropic", "nvidia", "apple", "stabilityai",
+                     "black-forest-labs", "cohere", "ibm", "amazon", "alibaba", "tencent",
+                     "bytedance", "baidu", "huggingface", "facebook", "xai-org", "moonshotai"}
+        seen_orgs = set()
+        for m in models:
+            model_id = str(m.get("modelId", "") or m.get("id", ""))
+            if "/" not in model_id:
+                continue
+            org = model_id.split("/")[0]
+            if org.lower() in SKIP_ORGS or org.lower() in seen_orgs:
+                continue
+            seen_orgs.add(org.lower())
+            candidates.append({
+                "name": org[:80],
+                "website": f"https://huggingface.co/{org}",
+                "description": f"AI org trending on Hugging Face — model: {model_id}, downloads: {m.get('downloads', 0)}, likes: {m.get('likes', 0)}",
+                "industry": "AI Infrastructure",
+                "hq_city": "", "hq_country": "United States",
+                "founded_date": "", "headcount": 0,
+                "total_funding_usd": 0,           # verified in Step 1b
+                "last_funding_round": "",
+                "last_funding_date": "",
+                "linkedin_url": "",
+                "_source": "HuggingFace Trending",
+            })
+    except Exception as e:
+        print(f"[HuggingFace] Error: {e}")
+    print(f"[HuggingFace Trending] {len(candidates)} candidates")
+    return candidates
+
+
+# ============================================================================
+# SOURCE 11: Product Hunt daily leaders (launch-day signal)
+# ============================================================================
+def source_producthunt() -> list:
+    """Product Hunt daily top launches via RSS — product-led companies at launch,
+    often pre-seed/seed. No API token required for the public feed."""
+    candidates = []
+    try:
+        feed = feedparser.parse("https://www.producthunt.com/feed")
+        for entry in feed.entries[:25]:
+            title = (entry.get("title", "") or "").strip()
+            summary = (entry.get("summary", "") or "").strip()
+            # Strip HTML from summary
+            summary = re.sub(r"<[^>]+>", " ", summary).strip()[:500]
+            if not title:
+                continue
+            candidates.append({
+                "name": title[:80],
+                "website": entry.get("link", ""),
+                "description": summary,
+                "industry": "Product Launch",
+                "hq_city": "", "hq_country": "United States",
+                "founded_date": "", "headcount": 0,
+                "total_funding_usd": 0,           # verified in Step 1b
+                "last_funding_round": "pre-seed",
+                "last_funding_date": "",
+                "linkedin_url": "",
+                "_source": "Product Hunt",
+            })
+    except Exception as e:
+        print(f"[Product Hunt] Error: {e}")
+    print(f"[Product Hunt] {len(candidates)} candidates")
+    return candidates
+
+
+# ============================================================================
 # SOURCE 8: GitHub Search
 # ============================================================================
 def source_github() -> list:
@@ -452,6 +592,9 @@ def main():
     all_candidates.extend(source_claude_research(ai_client))
     all_candidates.extend(source_rss_funding())
     all_candidates.extend(source_github())
+    all_candidates.extend(source_sbir())
+    all_candidates.extend(source_huggingface())
+    all_candidates.extend(source_producthunt())
 
     print(f"\nTotal raw candidates: {len(all_candidates)}")
 
